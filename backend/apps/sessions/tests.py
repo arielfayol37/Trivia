@@ -517,6 +517,174 @@ class SessionApiTests(TestCase):
         self.assertEqual(payload["state"]["list_race"]["found"][player_id], ["0"])
         self.assertTrue(payload["state"]["list_race"]["last_submission"][player_id]["accepted"])
 
+    def test_meta_strategy_wager_reveals_question_and_scores_bet(self):
+        meta_quiz = create_quiz_from_document(
+            {
+                "title": "Strategic Quantum",
+                "description": "Bet before answering.",
+                "topic": "quantum mechanics",
+                "difficulty": "medium",
+                "rounds": [
+                    {
+                        "type": "meta_strategy",
+                        "order": 1,
+                        "config": {
+                            "min_bet": 1,
+                            "max_bet": 10,
+                            "default_bet": 1,
+                            "bet_window_s": 10,
+                            "answer_timeout_s": 20,
+                        },
+                        "questions": [
+                            {
+                                "order": 1,
+                                "prompt_blocks": [
+                                    {
+                                        "type": "text",
+                                        "text": "What operator generates time evolution in the Schrodinger equation?",
+                                    }
+                                ],
+                                "answer_widget": {"type": "text_input"},
+                                "canonical_answer": "Hamiltonian",
+                                "acceptable_answers": ["Hamiltonian", "Hamiltonian operator"],
+                                "judge_mode": "fuzzy",
+                                "metadata": {"category_hint": "Foundations of quantum mechanics"},
+                            }
+                        ],
+                    }
+                ],
+            },
+            AuthoringContext(),
+        )
+        meta_quiz.status = QuizStatus.READY
+        meta_quiz.save(update_fields=["status"])
+        create_response = self.client.post(
+            "/api/sessions/",
+            data={"quiz_id": str(meta_quiz.id), "display_name": "Ariel"},
+            content_type="application/json",
+        )
+        session_id = create_response.json()["session"]["id"]
+        player_id = create_response.json()["player_id"]
+
+        start_response = self.client.post(f"/api/sessions/{session_id}/start/")
+
+        self.assertEqual(start_response.status_code, 200)
+        self.assertEqual(start_response.json()["state"]["phase"], "betting")
+        self.assertEqual(
+            start_response.json()["state"]["meta_strategy"]["current"]["hint"],
+            "Foundations of quantum mechanics",
+        )
+
+        premature_answer = self.client.post(
+            f"/api/sessions/{session_id}/players/{player_id}/answer/",
+            data={"submitted_text": "Hamiltonian"},
+            content_type="application/json",
+        )
+        self.assertEqual(premature_answer.status_code, 400)
+
+        wager_response = self.client.post(
+            f"/api/sessions/{session_id}/players/{player_id}/wager/",
+            data={"points": 7},
+            content_type="application/json",
+        )
+
+        self.assertEqual(wager_response.status_code, 200)
+        question_id = wager_response.json()["state"]["question_id"]
+        self.assertEqual(
+            wager_response.json()["state"]["meta_strategy"]["bets"][question_id][player_id]["points"],
+            7,
+        )
+
+        session = _session_queryset().get(pk=session_id)
+        token = _state_advance_token(session.state)
+        _auto_advance_session(session_id, token, "all_wagered")
+
+        revealed_payload = self.client.get(f"/api/sessions/{session_id}/").json()
+        self.assertEqual(revealed_payload["state"]["phase"], "question")
+
+        answer_response = self.client.post(
+            f"/api/sessions/{session_id}/players/{player_id}/answer/",
+            data={"submitted_text": "Hamiltonian"},
+            content_type="application/json",
+        )
+
+        self.assertEqual(answer_response.status_code, 200)
+        payload = answer_response.json()
+        submission = payload["state"]["submissions"][question_id][player_id]
+        self.assertTrue(submission["accepted"])
+        self.assertEqual(submission["wager"], 7.0)
+        self.assertEqual(submission["points_awarded"], 7.0)
+        self.assertEqual(payload["state"]["scores"][player_id], 7.0)
+
+    def test_meta_strategy_defaults_wager_on_betting_timeout(self):
+        meta_quiz = create_quiz_from_document(
+            {
+                "title": "Strategic Geography",
+                "description": "Default wager test.",
+                "topic": "geography",
+                "difficulty": "easy",
+                "rounds": [
+                    {
+                        "type": "meta_strategy",
+                        "order": 1,
+                        "config": {
+                            "min_bet": 2,
+                            "max_bet": 10,
+                            "default_bet": 2,
+                            "bet_window_s": 1,
+                            "answer_timeout_s": 20,
+                        },
+                        "questions": [
+                            {
+                                "order": 1,
+                                "prompt_blocks": [{"type": "text", "text": "Capital of Cameroon?"}],
+                                "answer_widget": {"type": "text_input"},
+                                "canonical_answer": "Yaounde",
+                                "acceptable_answers": ["Yaounde"],
+                                "judge_mode": "fuzzy",
+                                "metadata": {"category_hint": "Capital cities"},
+                            }
+                        ],
+                    }
+                ],
+            },
+            AuthoringContext(),
+        )
+        meta_quiz.status = QuizStatus.READY
+        meta_quiz.save(update_fields=["status"])
+        create_response = self.client.post(
+            "/api/sessions/",
+            data={"quiz_id": str(meta_quiz.id), "display_name": "Ariel"},
+            content_type="application/json",
+        )
+        session_id = create_response.json()["session"]["id"]
+        player_id = create_response.json()["player_id"]
+        self.client.post(f"/api/sessions/{session_id}/start/")
+        session = _session_queryset().get(pk=session_id)
+        state = session.state
+        state["question_started_at"] = (timezone.now() - timedelta(seconds=5)).isoformat()
+        session.state = state
+        session.save(update_fields=["state"])
+        token = _state_advance_token(session.state)
+
+        _auto_advance_session(session_id, token, "deadline")
+
+        revealed_payload = self.client.get(f"/api/sessions/{session_id}/").json()
+        question_id = revealed_payload["state"]["question_id"]
+        defaulted_wager = revealed_payload["state"]["meta_strategy"]["bets"][question_id][player_id]
+        self.assertEqual(revealed_payload["state"]["phase"], "question")
+        self.assertEqual(defaulted_wager["points"], 2)
+        self.assertTrue(defaulted_wager["defaulted"])
+
+        answer_response = self.client.post(
+            f"/api/sessions/{session_id}/players/{player_id}/answer/",
+            data={"submitted_text": "Yaounde"},
+            content_type="application/json",
+        )
+
+        self.assertEqual(answer_response.status_code, 200)
+        self.assertEqual(answer_response.json()["state"]["scores"][player_id], 2.0)
+
 
 class SessionRealtimeTests(TransactionTestCase):
     def setUp(self):

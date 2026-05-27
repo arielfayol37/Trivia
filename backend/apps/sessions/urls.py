@@ -7,6 +7,7 @@ from apps.sessions.views import (
     SessionJoinView,
     SessionNextQuestionView,
     SessionPlayerReadyView,
+    SessionPlaceWagerView,
     SessionStartView,
     SessionSubmitAnswerView,
 )
@@ -26,6 +27,11 @@ urlpatterns = [
         "<uuid:session_id>/players/<uuid:player_id>/answer/",
         SessionSubmitAnswerView.as_view(),
         name="session-submit-answer",
+    ),
+    path(
+        "<uuid:session_id>/players/<uuid:player_id>/wager/",
+        SessionPlaceWagerView.as_view(),
+        name="session-place-wager",
     ),
     path(
         "<uuid:session_id>/players/<uuid:player_id>/chat/",

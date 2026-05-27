@@ -31,6 +31,7 @@ import {
   getSession,
   joinSession,
   listQuizzes,
+  placeSessionWager,
   sendSessionChat,
   setSessionPlayerReady,
   startSession,
@@ -196,6 +197,10 @@ function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
+}
+
+function numberFrom(value: unknown, fallback: number) {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
 function chatMessages(session: LiveSession): SessionChatMessage[] {
@@ -562,6 +567,22 @@ export function QuizHome() {
     }
   }
 
+  async function handlePlaceWager(points: number) {
+    if (!liveSession || !localPlayerId) {
+      return;
+    }
+
+    setIsUpdatingSession(true);
+    setSessionError(null);
+    try {
+      setLiveSession(await placeSessionWager(liveSession.id, localPlayerId, points));
+    } catch (err) {
+      setSessionError(err instanceof Error ? err.message : "Could not place wager");
+    } finally {
+      setIsUpdatingSession(false);
+    }
+  }
+
   async function handleSendChat(message: string) {
     if (!liveSession || !localPlayerId) {
       return;
@@ -628,6 +649,7 @@ export function QuizHome() {
           onBackHome={handleBackHome}
           onFindSimilar={handleFindSimilar}
           onPlayAgain={() => handleCreateLobby(liveSession.quiz)}
+          onPlaceWager={handlePlaceWager}
           onSendChat={handleSendChat}
           onSubmitAnswer={handleSubmitAnswer}
           session={liveSession}
@@ -1322,6 +1344,7 @@ function GameRoom({
   onBackHome,
   onFindSimilar,
   onPlayAgain,
+  onPlaceWager,
   onSendChat,
   onSubmitAnswer,
   session,
@@ -1333,6 +1356,7 @@ function GameRoom({
   onBackHome: () => void;
   onFindSimilar: (quiz: Quiz) => void;
   onPlayAgain: () => void;
+  onPlaceWager: (points: number) => void;
   onSendChat: (message: string) => Promise<void>;
   onSubmitAnswer: (input: {
     submitted_text?: string;
@@ -1368,6 +1392,20 @@ function GameRoom({
     );
   }
 
+  if (asRecord(session.state).phase === "betting") {
+    return (
+      <BettingRoom
+        isUpdatingSession={isUpdatingSession}
+        localPlayerId={localPlayerId}
+        onAdvanceQuestion={onAdvanceQuestion}
+        onPlaceWager={onPlaceWager}
+        onSendChat={onSendChat}
+        session={session}
+        sessionError={sessionError}
+      />
+    );
+  }
+
   return (
     <PlayingRoom
       isUpdatingSession={isUpdatingSession}
@@ -1378,6 +1416,206 @@ function GameRoom({
       session={session}
       sessionError={sessionError}
     />
+  );
+}
+
+function BettingRoom({
+  isUpdatingSession,
+  localPlayerId,
+  onAdvanceQuestion,
+  onPlaceWager,
+  onSendChat,
+  session,
+  sessionError,
+}: {
+  isUpdatingSession: boolean;
+  localPlayerId: string | null;
+  onAdvanceQuestion: () => void;
+  onPlaceWager: (points: number) => void;
+  onSendChat: (message: string) => Promise<void>;
+  session: LiveSession;
+  sessionError: string | null;
+}) {
+  const question = currentQuestion(session);
+  const round = currentRound(session);
+  const localPlayer = session.players.find((player) => player.id === localPlayerId);
+  const isHost = Boolean(localPlayer?.is_host);
+  const state = asRecord(session.state);
+  const metaStrategy = asRecord(state.meta_strategy);
+  const current = asRecord(metaStrategy.current);
+  const questionId = typeof state.question_id === "string" ? state.question_id : question?.id ?? "";
+  const bets = asRecord(asRecord(metaStrategy.bets)[questionId]);
+  const minBet = numberFrom(current.min_bet, 1);
+  const maxBet = numberFrom(current.max_bet, 10);
+  const defaultBet = numberFrom(current.default_bet, minBet);
+  const hint = String(current.hint ?? "Mystery question");
+  const localBet = localPlayerId ? asRecord(bets[localPlayerId]) : {};
+  const lockedPoints = typeof localBet.points === "number" ? localBet.points : null;
+  const [selectedBet, setSelectedBet] = useState(defaultBet);
+  const wagerOptions = Array.from(
+    { length: Math.max(0, maxBet - minBet + 1) },
+    (_, index) => minBet + index,
+  ).slice(0, 20);
+  const lockedPlayers = session.players.filter((player) => {
+    const wager = asRecord(bets[player.id]);
+    return wager.points !== undefined && wager.points !== null;
+  });
+
+  useEffect(() => {
+    setSelectedBet(lockedPoints ?? defaultBet);
+    window.scrollTo({ left: 0, top: 0, behavior: "auto" });
+  }, [defaultBet, lockedPoints, questionId]);
+
+  if (!question) {
+    return (
+      <div className="mx-auto max-w-6xl px-5 py-10">
+        <div className="rounded-2xl border border-white/10 bg-night p-6 text-white shadow-stage sm:p-10">
+          <div className="text-[10px] font-bold uppercase tracking-[0.5em] text-aqua">
+            Meta-strategy
+          </div>
+          <h1 className="mt-2 font-display text-3xl uppercase">Waiting for the wager...</h1>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <div className="mx-auto max-w-6xl px-5 py-5 pb-32">
+        <div className="flex items-center justify-between gap-3 pr-14 text-[10px] font-bold uppercase tracking-[0.5em] text-stagegold">
+          <span>Meta-strategy · {round ? roundLabel(round.type) : ""}</span>
+          <span className="text-white/55">
+            Q{questionProgress(session).index + 1}
+            {questionProgress(session).count > 0 ? ` / ${questionProgress(session).count}` : ""}
+          </span>
+        </div>
+
+        <section className="relative mt-3 overflow-hidden rounded-2xl bg-night p-6 text-white shadow-stage sm:p-8">
+          <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-magenta/15 via-transparent to-stagegold/10" />
+          <div className="relative grid items-start gap-6 lg:grid-cols-[1fr_320px]">
+            <div className="rounded-xl bg-white p-6 text-midnight shadow-panel sm:p-8">
+              <div className="text-[10px] font-bold uppercase tracking-[0.4em] text-midnight/45">
+                Category hint
+              </div>
+              <h1 className="mt-4 font-display text-4xl uppercase leading-tight tracking-wide sm:text-6xl">
+                <InlineMathText text={hint} />
+              </h1>
+              <div className="mt-6 rounded-xl border border-softline bg-paper p-4 text-sm font-semibold leading-6 text-midnight/65">
+                Pick how many points this clue is worth before the full question is revealed.
+              </div>
+            </div>
+
+            <aside className="space-y-4">
+              <QuestionTimer session={session} />
+
+              <div className="rounded-xl border border-white/15 bg-white/5 p-4">
+                <div className="text-[10px] font-bold uppercase tracking-[0.4em] text-white/55">
+                  Your wager
+                </div>
+
+                <div className="mt-3 grid grid-cols-5 gap-2">
+                  {wagerOptions.map((points) => (
+                    <button
+                      className={`h-12 rounded-md border text-lg font-black tabular-nums transition ${
+                        selectedBet === points
+                          ? "border-stagegold bg-stagegold text-midnight"
+                          : "border-white/15 bg-white text-midnight hover:border-stagegold hover:bg-pale"
+                      } disabled:cursor-not-allowed disabled:opacity-50`}
+                      disabled={isUpdatingSession || lockedPoints !== null || !localPlayerId}
+                      key={points}
+                      onClick={() => setSelectedBet(points)}
+                      type="button"
+                    >
+                      {points}
+                    </button>
+                  ))}
+                </div>
+
+                <Button
+                  className="mt-3 w-full uppercase tracking-wider"
+                  disabled={isUpdatingSession || lockedPoints !== null || !localPlayerId}
+                  onClick={() => onPlaceWager(selectedBet)}
+                  type="button"
+                  variant="stage"
+                >
+                  {lockedPoints !== null ? (
+                    <>
+                      <CheckCircle2 className="h-4 w-4" />
+                      Locked at {lockedPoints}
+                    </>
+                  ) : isUpdatingSession ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <>
+                      <Sparkles className="h-4 w-4" />
+                      Lock wager
+                    </>
+                  )}
+                </Button>
+
+                {sessionError ? (
+                  <div className="mt-3 text-sm font-semibold text-inviteError">{sessionError}</div>
+                ) : null}
+              </div>
+
+              <div className="rounded-xl border border-white/15 bg-white/5 p-4">
+                <div className="flex items-baseline justify-between gap-3">
+                  <div className="text-[10px] font-bold uppercase tracking-[0.4em] text-white/55">
+                    Locked in
+                  </div>
+                  <div className="font-display text-2xl tabular-nums">
+                    {lockedPlayers.length}/{session.players.filter((player) => player.role === "player").length}
+                  </div>
+                </div>
+                <div className="mt-3 space-y-2">
+                  {session.players
+                    .filter((player) => player.role === "player")
+                    .map((player) => {
+                      const wager = asRecord(bets[player.id]);
+                      const points = typeof wager.points === "number" ? wager.points : null;
+                      return (
+                        <div
+                          className="flex items-center justify-between gap-2 rounded-md bg-white/5 px-3 py-2 text-sm"
+                          key={player.id}
+                        >
+                          <span className="truncate font-semibold">{player.display_name}</span>
+                          <span
+                            className={`rounded-full px-2 py-1 text-[10px] font-black uppercase tracking-[0.2em] ${
+                              points === null ? "bg-white/10 text-white/55" : "bg-aqua text-midnight"
+                            }`}
+                          >
+                            {points === null ? "choosing" : `${points} pts`}
+                          </span>
+                        </div>
+                      );
+                    })}
+                </div>
+              </div>
+
+              <Button
+                className="w-full uppercase tracking-wider"
+                disabled={!isHost || isUpdatingSession}
+                onClick={onAdvanceQuestion}
+                type="button"
+                variant="stage"
+              >
+                Reveal question
+              </Button>
+            </aside>
+          </div>
+        </section>
+      </div>
+
+      <RoomChatPanel
+        disabled={!localPlayerId}
+        localPlayerId={localPlayerId}
+        mode="drawer"
+        onSendChat={onSendChat}
+        session={session}
+        tone="dark"
+      />
+      <Chyron session={session} />
+    </>
   );
 }
 

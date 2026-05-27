@@ -82,8 +82,12 @@ Implemented:
   - The frontend stores the local session/player in local storage and restores the same
     player on refresh when the invite code matches.
   - Minimal list-race live runner.
+  - First playable meta-strategy runner: players see a pre-question hint, lock a wager
+    from the round's configured range, then the question is revealed and correct answers
+    score the wagered points. Missing wagers default to the configured minimum/default
+    when the betting timer expires.
   - `/ws/session/<session_id>/` broadcasts fresh session snapshots after join, ready,
-    start, answer, advance, and finish mutations.
+    start, wager, answer, advance, and finish mutations.
   - Frontend listens over WebSocket and keeps a slower REST snapshot poll as a fallback.
   - Backend schedules automatic progression on question timeout and when all active
     players have submitted. The host browser no longer owns auto-advance.
@@ -128,7 +132,8 @@ Still not done:
   presence is socket-count based and current player-response reveal is UI-gated, not
   security-redacted per player.
 - Full live support for all answer widgets and round types (`list_input`, `ordering`,
-  `matching`, `image_choice`, `hotspot`, full `meta_strategy`, full `buzz_in`).
+  `matching`, `image_choice`, `hotspot`, richer `meta_strategy` variants, full
+  `buzz_in`).
 - LLM judge fallback currently applies to standard typed open-answer questions, not
   list-race item matching.
 - Post-game review/replay beyond the current final scoreboard and action buttons.
@@ -511,12 +516,15 @@ prompt-block and answer-widget rendering layer introduced in M1.
    - Live opponent counters in the UI.
    - End condition: timer expires OR a player gets all items.
 3. **Meta-strategy** (`rounds/meta_strategy.py`):
-   - Two-phase state: `betting` → `answering`.
-   - `betting`: server reveals category hint; each player submits a `place_bet` action
-     within `bet_window_s`. Default bet on timeout = `min_bet`.
-   - `answering`: question revealed; each player submits an answer within
-     `answer_timeout_s`. Fuzzy- or LLM-judged.
-   - Score: `bet × correctness` (with `wrong_penalty` policy).
+   - Implemented minimally inline in `apps/sessions/views.py` and the main play UI.
+   - Two-phase state: `betting` → `question`.
+   - `betting`: server reveals `metadata.category_hint`; each player submits a wager
+     within `bet_window_s`. Default wager on timeout = `default_bet`/`min_bet`.
+   - `question`: prompt is revealed; each player submits an answer within
+     `answer_timeout_s`. Existing fuzzy/LLM judging applies.
+   - Score: `wager × correctness`.
+   - Remaining: move into a dedicated state-machine module, add wrong-penalty variants,
+     stronger animations, and richer host controls.
 4. **Buzz-in** (`rounds/buzz_in.py`):
    - Authoritative buzz resolution: each `buzz_requested` carries a client timestamp
      for diagnostics, but server orders by server-receive time.

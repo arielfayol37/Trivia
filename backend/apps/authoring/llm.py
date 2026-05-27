@@ -334,6 +334,38 @@ FORMAT_EXAMPLES = {
         },
         "notes": ["Use list_race only when players should recall many answers from one prompt."],
     },
+    "meta_strategy": {
+        "round": {
+            "type": "meta_strategy",
+            "config": {
+                "min_bet": 1,
+                "max_bet": 10,
+                "default_bet": 1,
+                "bet_window_s": 10,
+                "answer_timeout_s": 25,
+            },
+            "questions": [
+                {
+                    "prompt_blocks": [
+                        {
+                            "type": "text",
+                            "text": "Which operator generates time evolution in the Schrodinger equation?",
+                        }
+                    ],
+                    "answer_widget": {"type": "text_input", "placeholder": "Operator"},
+                    "canonical_answer": "Hamiltonian",
+                    "acceptable_answers": ["Hamiltonian", "Hamiltonian operator"],
+                    "judge_mode": "fuzzy",
+                    "metadata": {"category_hint": "Foundations of quantum mechanics"},
+                }
+            ],
+        },
+        "notes": [
+            "Players see metadata.category_hint before they see prompt_blocks.",
+            "After players wager, the normal question prompt is revealed.",
+            "Use this for risk/reward strategy, not for every ordinary question.",
+        ],
+    },
     "ordering": {
         "question": {
             "prompt_blocks": [{"type": "text", "text": "Order these countries by population, largest first."}],
@@ -452,6 +484,7 @@ def _user_prompt(prompt: str, source_text: str) -> dict:
             "For fuzzy text_input questions, include non-empty canonical_answer and acceptable_answers.",
             "If a text_input answer cannot be enumerated, set judge_mode to llm and provide a concise canonical_answer/rubric.",
             "For multiple_choice widgets, use choices as an array of strings and set canonical_answer to the exact correct choice text.",
+            "For meta_strategy rounds, set round config min_bet, max_bet, default_bet, bet_window_s, answer_timeout_s, and put a concise pre-question hint in each question's metadata.category_hint.",
             "Every non-list-race question must include a playable answer key.",
             "For list_race rounds, config.prompt and config.items must be non-empty; every item needs canonical and acceptable variants.",
             "Use LaTeX strings for math blocks, without Markdown fences.",

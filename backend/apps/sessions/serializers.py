@@ -65,5 +65,9 @@ class SubmitAnswerSerializer(serializers.Serializer):
     submitted_payload = serializers.JSONField(required=False)
 
 
+class PlaceWagerSerializer(serializers.Serializer):
+    points = serializers.IntegerField(min_value=1, max_value=100)
+
+
 class ChatMessageSerializer(serializers.Serializer):
     message = serializers.CharField(max_length=500, trim_whitespace=True)

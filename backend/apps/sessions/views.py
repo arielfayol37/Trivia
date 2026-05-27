@@ -20,12 +20,13 @@ from apps.sessions.serializers import (
     ChatMessageSerializer,
     CreateSessionSerializer,
     JoinSessionSerializer,
+    PlaceWagerSerializer,
     ReadySerializer,
     SessionSerializer,
     SubmitAnswerSerializer,
 )
 
-AUTO_ADVANCE_PHASES = {"question", "list_race"}
+AUTO_ADVANCE_PHASES = {"betting", "question", "list_race"}
 _AUTO_ADVANCE_LOCK = threading.Lock()
 _AUTO_ADVANCE_TIMERS: dict[str, threading.Timer] = {}
 _LOBBY_COUNTDOWN_LOCK = threading.Lock()
@@ -186,8 +187,14 @@ class SessionSubmitAnswerView(APIView):
             )
 
         player = get_object_or_404(SessionPlayer, pk=player_id, session=session)
-        if (session.state or {}).get("phase") == "list_race":
+        phase = (session.state or {}).get("phase")
+        if phase == "list_race":
             return _submit_list_race_answer(session, player, serializer.validated_data)
+        if phase == "betting":
+            return Response(
+                {"detail": "Place a wager before answering"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         question = _current_question(session)
         if not question:
@@ -199,7 +206,7 @@ class SessionSubmitAnswerView(APIView):
         submitted_payload = serializer.validated_data.get("submitted_payload") or {}
         submitted_text = _submitted_text(serializer.validated_data, submitted_payload)
         result = _judge_submission(question, submitted_text, submitted_payload)
-        points_awarded = _points_for_question(question) if result["accepted"] else 0
+        points_awarded = _points_for_question(session, question, player) if result["accepted"] else 0
 
         AnswerSubmission.objects.update_or_create(
             session=session,
@@ -228,6 +235,7 @@ class SessionSubmitAnswerView(APIView):
             "submitted_text": submitted_text,
             "submitted": True,
             "judge_mode_used": result["judge_mode_used"],
+            "wager": _wager_for_player(session.state or {}, question, player),
         }
         scores = state.setdefault("scores", {})
         scores[player_id_text] = _score_for_player(session, player)
@@ -242,6 +250,46 @@ class SessionSubmitAnswerView(APIView):
                 reason="all_submitted",
                 delay_s=_all_submitted_advance_delay_s(),
             )
+        return Response(SessionSerializer(refreshed).data)
+
+
+class SessionPlaceWagerView(APIView):
+    def post(self, request, session_id, player_id):
+        serializer = PlaceWagerSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        session = get_object_or_404(_session_queryset(), pk=session_id)
+        if session.status != SessionStatus.PLAYING:
+            return Response(
+                {"detail": "Wagers can only be placed while playing"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if (session.state or {}).get("phase") != "betting":
+            return Response(
+                {"detail": "No active betting phase"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if _deadline_has_elapsed(session):
+            _schedule_auto_advance(session, reason="deadline", delay_s=0)
+            return Response(
+                {"detail": "Betting is closed"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        player = get_object_or_404(SessionPlayer, pk=player_id, session=session)
+        wager_result = _place_meta_strategy_wager(
+            session,
+            player,
+            serializer.validated_data["points"],
+        )
+        if wager_result:
+            return Response({"detail": wager_result}, status=status.HTTP_400_BAD_REQUEST)
+
+        refreshed = _session_queryset().get(pk=session_id)
+        broadcast_session_snapshot_sync(session_id, "session.wager_placed")
+        question = _current_question(refreshed)
+        if question and _all_active_players_wagered(refreshed, question):
+            _schedule_auto_advance(refreshed, reason="all_wagered", delay_s=0.6)
         return Response(SessionSerializer(refreshed).data)
 
 
@@ -390,7 +438,7 @@ def _start_session(session: Session) -> tuple[Session | None, str | None]:
     first_question = selected_questions[0]
     session.status = SessionStatus.PLAYING
     session.started_at = timezone.now()
-    session.current_round_idx = 0
+    session.current_round_idx = max(first_question.round.order - 1, 0)
     session.current_question_idx = 0
     session.state = _question_state(session, first_question, 0, selected_questions)
     session.save(
@@ -406,7 +454,11 @@ def _start_session(session: Session) -> tuple[Session | None, str | None]:
 
 
 def _advance_session(session: Session) -> str:
-    if (session.state or {}).get("phase") == "list_race":
+    phase = (session.state or {}).get("phase")
+    if phase == "betting":
+        return _reveal_meta_strategy_question(session)
+
+    if phase == "list_race":
         _finish_session(session)
         _clear_auto_advance_timer(session.id)
         return "session.finished"
@@ -420,8 +472,9 @@ def _advance_session(session: Session) -> str:
 
     next_question = selected_questions[next_index]
     session.current_question_idx = next_index
+    session.current_round_idx = max(next_question.round.order - 1, 0)
     session.state = _question_state(session, next_question, next_index, selected_questions)
-    session.save(update_fields=["current_question_idx", "state"])
+    session.save(update_fields=["current_round_idx", "current_question_idx", "state"])
     return "session.question_advanced"
 
 
@@ -490,6 +543,9 @@ def _auto_advance_session(session_id, token: str, reason: str) -> None:
 
 
 def _auto_advance_condition_met(session: Session, reason: str) -> bool:
+    if reason == "all_wagered":
+        question = _current_question(session)
+        return bool(question and _all_active_players_wagered(session, question))
     if reason == "all_submitted":
         question = _current_question(session)
         return bool(question and _all_active_players_submitted(session, question))
@@ -497,19 +553,32 @@ def _auto_advance_condition_met(session: Session, reason: str) -> bool:
 
 
 def _all_active_players_submitted(session: Session, question: Question) -> bool:
-    player_ids = [
-        str(player_id)
-        for player_id in session.players.filter(
-            role=SessionRole.PLAYER,
-            left_at__isnull=True,
-        ).values_list("id", flat=True)
-    ]
+    player_ids = _active_player_ids(session)
     if not player_ids:
         return False
 
     submissions = (session.state or {}).get("submissions") or {}
     question_submissions = submissions.get(str(question.id)) or {}
     return all((question_submissions.get(player_id) or {}).get("submitted") is True for player_id in player_ids)
+
+
+def _all_active_players_wagered(session: Session, question: Question) -> bool:
+    player_ids = _active_player_ids(session)
+    if not player_ids:
+        return False
+
+    question_bets = _meta_strategy_question_bets(session.state or {}, question)
+    return all((question_bets.get(player_id) or {}).get("points") is not None for player_id in player_ids)
+
+
+def _active_player_ids(session: Session) -> list[str]:
+    return [
+        str(player_id)
+        for player_id in session.players.filter(
+            role=SessionRole.PLAYER,
+            left_at__isnull=True,
+        ).values_list("id", flat=True)
+    ]
 
 
 def _deadline_has_elapsed(session: Session) -> bool:
@@ -536,6 +605,8 @@ def _question_deadline(session: Session):
 def _state_advance_token(state: dict) -> str | None:
     phase = state.get("phase")
     started_at = state.get("question_started_at")
+    if phase == "betting" and state.get("question_id"):
+        return f"betting:{state['question_id']}:{started_at}"
     if phase == "question" and state.get("question_id"):
         return f"question:{state['question_id']}:{started_at}"
     if phase == "list_race" and state.get("round_id"):
@@ -674,6 +745,18 @@ def _question_state(
     index: int,
     selected_questions: list[Question],
 ) -> dict:
+    if question.round.type == RoundType.META_STRATEGY:
+        return _meta_strategy_betting_state(session, question, index, selected_questions)
+
+    return _answer_question_state(session, question, index, selected_questions)
+
+
+def _answer_question_state(
+    session: Session,
+    question: Question,
+    index: int,
+    selected_questions: list[Question],
+) -> dict:
     previous_state = _without_lobby_countdown(session.state or {})
     timeout_s = question.round.config.get("answer_timeout_s") or question.round.config.get("time_limit_s") or 25
     return {
@@ -687,6 +770,181 @@ def _question_state(
         "question_started_at": timezone.now().isoformat(),
         "question_timeout_s": int(timeout_s),
     }
+
+
+def _meta_strategy_betting_state(
+    session: Session,
+    question: Question,
+    index: int,
+    selected_questions: list[Question],
+) -> dict:
+    previous_state = _without_lobby_countdown(session.state or {})
+    config = _meta_strategy_config(question.round)
+    meta_strategy = _meta_strategy_state(previous_state)
+    bets = meta_strategy.setdefault("bets", {})
+    bets.setdefault(str(question.id), {})
+    meta_strategy["current"] = {
+        "question_id": str(question.id),
+        "hint": _meta_strategy_hint(question),
+        "min_bet": config["min_bet"],
+        "max_bet": config["max_bet"],
+        "default_bet": config["default_bet"],
+        "bet_window_s": config["bet_window_s"],
+        "answer_timeout_s": config["answer_timeout_s"],
+    }
+
+    return {
+        **previous_state,
+        "phase": "betting",
+        "selected_question_ids": [str(selected_question.id) for selected_question in selected_questions],
+        "question_count": len(selected_questions),
+        "question_index": index,
+        "round_id": str(question.round.id),
+        "question_id": str(question.id),
+        "question_started_at": timezone.now().isoformat(),
+        "question_timeout_s": config["bet_window_s"],
+        "meta_strategy": meta_strategy,
+    }
+
+
+def _reveal_meta_strategy_question(session: Session) -> str:
+    question = _current_question(session)
+    if not question:
+        _finish_session(session)
+        _clear_auto_advance_timer(session.id)
+        return "session.finished"
+
+    selected_questions = _selected_questions(session)
+    index = _selected_question_index(selected_questions, question)
+    _apply_default_meta_strategy_wagers(session, question)
+    session.state = _meta_strategy_answer_state(session, question, index, selected_questions)
+    session.save(update_fields=["state"])
+    return "session.question_revealed"
+
+
+def _meta_strategy_answer_state(
+    session: Session,
+    question: Question,
+    index: int,
+    selected_questions: list[Question],
+) -> dict:
+    state = _answer_question_state(session, question, index, selected_questions)
+    config = _meta_strategy_config(question.round)
+    state["question_timeout_s"] = config["answer_timeout_s"]
+    meta_strategy = _meta_strategy_state(state)
+    current = meta_strategy.get("current") if isinstance(meta_strategy.get("current"), dict) else {}
+    meta_strategy["current"] = {
+        **current,
+        "question_id": str(question.id),
+        "hint": _meta_strategy_hint(question),
+        "min_bet": config["min_bet"],
+        "max_bet": config["max_bet"],
+        "default_bet": config["default_bet"],
+        "bet_window_s": config["bet_window_s"],
+        "answer_timeout_s": config["answer_timeout_s"],
+        "revealed_at": timezone.now().isoformat(),
+    }
+    state["meta_strategy"] = meta_strategy
+    return state
+
+
+def _selected_question_index(selected_questions: list[Question], question: Question) -> int:
+    for index, selected_question in enumerate(selected_questions):
+        if selected_question.id == question.id:
+            return index
+    return 0
+
+
+def _place_meta_strategy_wager(session: Session, player: SessionPlayer, points: int) -> str | None:
+    question = _current_question(session)
+    if not question or question.round.type != RoundType.META_STRATEGY:
+        return "No active meta-strategy question"
+
+    config = _meta_strategy_config(question.round)
+    if points < config["min_bet"] or points > config["max_bet"]:
+        return f"Wager must be between {config['min_bet']} and {config['max_bet']}"
+
+    state = session.state or {}
+    meta_strategy = _meta_strategy_state(state)
+    question_bets = meta_strategy.setdefault("bets", {}).setdefault(str(question.id), {})
+    question_bets[str(player.id)] = {
+        "points": points,
+        "submitted_at": timezone.now().isoformat(),
+    }
+    state["meta_strategy"] = meta_strategy
+    session.state = state
+    session.save(update_fields=["state"])
+    return None
+
+
+def _apply_default_meta_strategy_wagers(session: Session, question: Question) -> None:
+    state = session.state or {}
+    config = _meta_strategy_config(question.round)
+    meta_strategy = _meta_strategy_state(state)
+    question_bets = meta_strategy.setdefault("bets", {}).setdefault(str(question.id), {})
+    now = timezone.now().isoformat()
+    for player_id in _active_player_ids(session):
+        if (question_bets.get(player_id) or {}).get("points") is None:
+            question_bets[player_id] = {
+                "points": config["default_bet"],
+                "submitted_at": now,
+                "defaulted": True,
+            }
+    state["meta_strategy"] = meta_strategy
+    session.state = state
+
+
+def _meta_strategy_config(round_obj: Round) -> dict[str, int]:
+    min_bet = int(round_obj.config.get("min_bet", 1))
+    max_bet = int(round_obj.config.get("max_bet", 10))
+    if max_bet < min_bet:
+        max_bet = min_bet
+    default_bet = int(round_obj.config.get("default_bet", min_bet))
+    default_bet = min(max(default_bet, min_bet), max_bet)
+    return {
+        "min_bet": min_bet,
+        "max_bet": max_bet,
+        "default_bet": default_bet,
+        "bet_window_s": int(round_obj.config.get("bet_window_s", 10)),
+        "answer_timeout_s": int(round_obj.config.get("answer_timeout_s", 25)),
+    }
+
+
+def _meta_strategy_hint(question: Question) -> str:
+    metadata = question.metadata if isinstance(question.metadata, dict) else {}
+    for key in ["category_hint", "hint", "strategy_hint", "topic_hint"]:
+        value = metadata.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+    round_hint = question.round.config.get("category_hint")
+    if isinstance(round_hint, str) and round_hint.strip():
+        return round_hint.strip()
+
+    return "Mystery question"
+
+
+def _meta_strategy_state(state: dict) -> dict:
+    existing = state.get("meta_strategy")
+    return existing if isinstance(existing, dict) else {}
+
+
+def _meta_strategy_question_bets(state: dict, question: Question) -> dict:
+    bets = _meta_strategy_state(state).get("bets")
+    if not isinstance(bets, dict):
+        return {}
+    question_bets = bets.get(str(question.id))
+    return question_bets if isinstance(question_bets, dict) else {}
+
+
+def _wager_for_player(state: dict, question: Question, player: SessionPlayer) -> float | None:
+    if question.round.type != RoundType.META_STRATEGY:
+        return None
+    wager = _meta_strategy_question_bets(state, question).get(str(player.id)) or {}
+    points = wager.get("points") if isinstance(wager, dict) else None
+    if points is None:
+        return float(_meta_strategy_config(question.round)["default_bet"])
+    return float(points)
 
 
 def _list_race_state(session: Session, round_obj: Round) -> dict:
@@ -880,7 +1138,9 @@ def _match_list_race_item(round_obj: Round, submitted_text: str) -> dict:
     return best_result
 
 
-def _points_for_question(question: Question) -> float:
+def _points_for_question(session: Session, question: Question, player: SessionPlayer) -> float:
+    if question.round.type == RoundType.META_STRATEGY:
+        return float(_wager_for_player(session.state or {}, question, player) or 0)
     return float(question.round.config.get("points_per_question", 10))
 
 

@@ -90,7 +90,7 @@ const authoringModes: Array<{
     label: "Meta Mix",
     icon: ImageIcon,
     instruction:
-      "Create mixed rounds, including at least one meta_strategy round where players choose risk before seeing the exact question.",
+      "Create mixed rounds, including at least one playable meta_strategy round where players see metadata.category_hint, choose a wager, then see the question.",
   },
 ];
 
@@ -234,6 +234,7 @@ function buildConversationPrompt({
         "Prefer currently playable answer flows unless the user explicitly requests an experimental format: text_input, multiple_choice, image prompt plus text_input, and list_race.",
         "For Image Sprint mode, create sync_open questions with image prompt blocks and the requested answer widget. Do not create list_race rounds unless the user explicitly asks for a list race.",
         "For image or flag quizzes, preserve reliable source image URLs exactly in prompt_blocks[].url; otherwise make the image requirement explicit in metadata and alt/caption fields so assets can be attached later.",
+        "For meta_strategy rounds, set min_bet, max_bet, default_bet, bet_window_s, answer_timeout_s, and metadata.category_hint on each question.",
         "If revising a current draft, preserve good material and make only the requested conceptual changes.",
       ],
     },

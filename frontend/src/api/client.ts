@@ -164,6 +164,16 @@ export function submitSessionAnswer(
   );
 }
 
+export function placeSessionWager(sessionId: string, playerId: string, points: number) {
+  return request<LiveSession>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/players/${encodeURIComponent(playerId)}/wager/`,
+    {
+      method: "POST",
+      body: JSON.stringify({ points }),
+    },
+  );
+}
+
 export function sendSessionChat(sessionId: string, playerId: string, message: string) {
   return request<LiveSession>(
     `/api/sessions/${encodeURIComponent(sessionId)}/players/${encodeURIComponent(playerId)}/chat/`,
