@@ -103,6 +103,9 @@ Implemented:
   - `/ws/session/<session_id>/` broadcasts fresh session snapshots after join, ready,
     start, wager, answer, advance, and finish mutations.
   - Frontend listens over WebSocket and keeps a slower REST snapshot poll as a fallback.
+    If the socket drops, the client retries with backoff while REST snapshots keep the
+    room usable; a compact status chip exposes reconnect/snapshot mode and offers a
+    manual resync.
   - Backend schedules automatic progression on question timeout and when all active
     players have submitted. The host browser no longer owns auto-advance.
   - After a question reveal, every player can mark themselves ready for the next
@@ -132,6 +135,8 @@ Implemented:
   - Live question screen with timer, answer panel, verdict reveal, and bottom score
     chyron.
   - In-session site chrome is hidden during active play/finished states.
+  - Reconnect/snapshot-mode status appears as a compact top-center chip only when live
+    updates are degraded.
   - During play and post-game, room chat collapses into a small top-right icon with an
     unread count instead of taking permanent screen space.
   - Correct answer and player submissions now reveal in a fixed compact dock above the
@@ -166,9 +171,9 @@ Still not done:
 - Fully server-authoritative multiplayer. WebSockets now broadcast snapshots and the
   backend owns basic auto-advance, but REST still performs player actions and the
   scheduler is in-process rather than a durable Redis/Celery-style job runner.
-- Robust disconnect/reconnect and production identity hardening. Current presence is
-  socket-count based and current player-response reveal is UI-gated, not
-  security-redacted per player.
+- Production identity hardening. Current sockets identify participants with `player_id`,
+  current presence is socket-count based, and current player-response reveal is
+  UI-gated rather than security-redacted per player.
 - Full live support for all answer widgets and round types (`list_input`, `hotspot`,
   richer `meta_strategy` variants, full `buzz_in`). `image_choice`, `ordering`, and
   `matching` now have live renderers, exact payload scoring, locked-state affordances,
@@ -720,10 +725,12 @@ questions.
 
 **Tasks**:
 1. Disconnect/reconnect snapshot logic:
-   - WS reconnect handler refetches current session state.
-   - Server tolerates rapid reconnects; idempotent join handling.
-   - The "no-pause" rule from SPEC §7.4 is already the default behavior; verify it
-     holds across all four round types under disconnect tests.
+   - Implemented: WS reconnect retries with backoff and REST snapshot fallback.
+   - Implemented: manual room resync from the degraded-connection chip.
+   - Server tolerates rapid reconnects; idempotent join handling relies on the restored
+     local `SessionPlayer`.
+   - The "no-pause" rule from SPEC §7.4 is already the default behavior; remaining work
+     is broader disconnect verification across all four round types.
 2. Spectator mode (late-join):
    - Joining after `status=playing` admits as `SessionPlayer` with `role="spectator"`.
    - Spectator UI hides answer inputs and shows everything else (questions, scores,

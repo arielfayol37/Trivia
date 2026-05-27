@@ -65,6 +65,12 @@ type DifficultyFilter = "all" | Quiz["difficulty"];
 type QuizCategoryId = "all" | Quiz["category"];
 type QuizRound = Quiz["rounds"][number];
 type AntiCheatKind = "tab_blur" | "tab_focus" | "paste";
+type RealtimeStatus = "idle" | "connecting" | "live" | "reconnecting" | "fallback";
+type RealtimeState = {
+  attempt: number;
+  lastSyncedAt: string | null;
+  status: RealtimeStatus;
+};
 type PlayedQuestion = {
   question: Question;
   round: QuizRound;
@@ -127,6 +133,8 @@ const playerColors = ["#3564ff", "#f05d5e", "#72e0b3", "#e8c87a", "#8a5cf6", "#f
 const localSessionStorageKey = "trivia.localSession.v1";
 const presenceHeartbeatMs = 15_000;
 const presenceStaleAfterMs = 45_000;
+const realtimePollMs = 10_000;
+const realtimeReconnectMaxDelayMs = 10_000;
 
 type StoredLocalSession = {
   invite_code: string;
@@ -447,6 +455,11 @@ export function QuizHome() {
   const [isJoiningSession, setIsJoiningSession] = useState(false);
   const [isUpdatingSession, setIsUpdatingSession] = useState(false);
   const [sessionError, setSessionError] = useState<string | null>(null);
+  const [realtimeState, setRealtimeState] = useState<RealtimeState>({
+    attempt: 0,
+    lastSyncedAt: null,
+    status: "idle",
+  });
 
   useEffect(() => {
     getHealth().then(setHealth).catch(() => setHealth(null));
@@ -491,42 +504,135 @@ export function QuizHome() {
 
   useEffect(() => {
     if (!liveSession) {
+      setRealtimeState({ attempt: 0, lastSyncedAt: null, status: "idle" });
       return;
     }
 
+    const sessionId = liveSession.id;
     let isClosed = false;
-    const socket = new WebSocket(getSessionSocketUrl(liveSession.id, localPlayerId));
-    socket.addEventListener("message", (event) => {
+    let heartbeatTimer = 0;
+    let reconnectTimer = 0;
+    let socket: WebSocket | null = null;
+    let reconnectAttempt = 0;
+    let hasOpened = false;
+
+    function updateRealtimeState(patch: Partial<RealtimeState>) {
+      if (isClosed) {
+        return;
+      }
+      setRealtimeState((current) => ({ ...current, ...patch }));
+    }
+
+    function applySnapshot(session: LiveSession) {
+      if (isClosed) {
+        return;
+      }
+      setLiveSession(session);
+      updateRealtimeState({ lastSyncedAt: new Date().toISOString() });
+    }
+
+    async function refreshSnapshot({ markFallback = false } = {}) {
       try {
-        const payload = JSON.parse(event.data) as { session?: LiveSession };
-        if (!isClosed && payload.session) {
-          setLiveSession(payload.session);
+        const session = await getSession(sessionId);
+        applySnapshot(session);
+        if (markFallback && socket?.readyState !== WebSocket.OPEN) {
+          updateRealtimeState({ status: "fallback" });
         }
       } catch {
-        // Ignore malformed socket payloads; the REST fallback will resync state.
+        if (markFallback && socket?.readyState !== WebSocket.OPEN) {
+          updateRealtimeState({
+            attempt: reconnectAttempt,
+            status: hasOpened ? "reconnecting" : "connecting",
+          });
+        }
       }
-    });
+    }
 
-    const sendHeartbeat = () => {
-      if (socket.readyState === WebSocket.OPEN) {
+    function clearHeartbeat() {
+      if (heartbeatTimer) {
+        window.clearInterval(heartbeatTimer);
+        heartbeatTimer = 0;
+      }
+    }
+
+    function scheduleReconnect() {
+      if (isClosed) {
+        return;
+      }
+      reconnectAttempt += 1;
+      const delayMs = Math.min(
+        realtimeReconnectMaxDelayMs,
+        750 * 2 ** Math.min(reconnectAttempt - 1, 4),
+      );
+      updateRealtimeState({
+        attempt: reconnectAttempt,
+        status: hasOpened ? "reconnecting" : "connecting",
+      });
+      reconnectTimer = window.setTimeout(connectSocket, delayMs);
+    }
+
+    function sendHeartbeat() {
+      if (socket?.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({ type: "ping" }));
       }
-    };
+    }
 
-    socket.addEventListener("open", sendHeartbeat);
+    function connectSocket() {
+      if (isClosed) {
+        return;
+      }
 
-    const heartbeatTimer = window.setInterval(sendHeartbeat, presenceHeartbeatMs);
+      socket = new WebSocket(getSessionSocketUrl(sessionId, localPlayerId));
+      updateRealtimeState({
+        attempt: reconnectAttempt,
+        status: hasOpened ? "reconnecting" : "connecting",
+      });
+
+      socket.addEventListener("open", () => {
+        if (isClosed) {
+          return;
+        }
+        hasOpened = true;
+        reconnectAttempt = 0;
+        updateRealtimeState({ attempt: 0, status: "live" });
+        sendHeartbeat();
+        clearHeartbeat();
+        heartbeatTimer = window.setInterval(sendHeartbeat, presenceHeartbeatMs);
+      });
+
+      socket.addEventListener("message", (event) => {
+        try {
+          const payload = JSON.parse(event.data) as { session?: LiveSession };
+          if (payload.session) {
+            applySnapshot(payload.session);
+            updateRealtimeState({ attempt: 0, status: "live" });
+          }
+        } catch {
+          // Ignore malformed socket payloads; the REST fallback will resync state.
+        }
+      });
+
+      socket.addEventListener("error", () => {
+        socket?.close();
+      });
+
+      socket.addEventListener("close", () => {
+        clearHeartbeat();
+        scheduleReconnect();
+      });
+    }
+
+    connectSocket();
     const pollTimer = window.setInterval(() => {
-      getSession(liveSession.id)
-        .then(setLiveSession)
-        .catch(() => undefined);
-    }, 10000);
+      void refreshSnapshot({ markFallback: true });
+    }, realtimePollMs);
 
     return () => {
       isClosed = true;
-      window.clearInterval(heartbeatTimer);
+      clearHeartbeat();
+      window.clearTimeout(reconnectTimer);
       window.clearInterval(pollTimer);
-      socket.close();
+      socket?.close();
     };
   }, [liveSession?.id, localPlayerId]);
 
@@ -876,6 +982,26 @@ export function QuizHome() {
     }
   }
 
+  async function handleResyncSession() {
+    if (!liveSession) {
+      return;
+    }
+    setSessionError(null);
+    setRealtimeState((current) => ({ ...current, status: "connecting" }));
+    try {
+      const session = await getSession(liveSession.id);
+      setLiveSession(session);
+      setRealtimeState({
+        attempt: 0,
+        lastSyncedAt: new Date().toISOString(),
+        status: "fallback",
+      });
+    } catch (err) {
+      setSessionError(err instanceof Error ? err.message : "Could not resync room");
+      setRealtimeState((current) => ({ ...current, status: "reconnecting" }));
+    }
+  }
+
   async function handleAdvanceQuestion() {
     if (!liveSession || !localPlayerId) {
       return;
@@ -943,6 +1069,12 @@ export function QuizHome() {
   return (
     <main className="min-h-screen bg-midnight text-white">
       {isGameActive || isInviteJoinMode ? null : <TopBar health={health} dark />}
+      {liveSession ? (
+        <RealtimeStatusBanner
+          onResync={handleResyncSession}
+          state={realtimeState}
+        />
+      ) : null}
 
       {liveSession?.status === "playing" || liveSession?.status === "finished" ? (
         <GameRoom
@@ -1073,6 +1205,60 @@ function TopBar({ health, dark }: { health: HealthResponse | null; dark: boolean
         </div>
       </div>
     </header>
+  );
+}
+
+function RealtimeStatusBanner({
+  onResync,
+  state,
+}: {
+  onResync: () => void;
+  state: RealtimeState;
+}) {
+  if (state.status === "idle" || state.status === "live") {
+    return null;
+  }
+
+  const isConnecting = state.status === "connecting" || state.status === "reconnecting";
+  const label =
+    state.status === "fallback"
+      ? "Snapshot mode"
+      : state.status === "reconnecting"
+        ? "Reconnecting"
+        : "Connecting";
+  const detail =
+    state.status === "fallback"
+      ? "Live updates are retrying"
+      : state.attempt > 1
+        ? `Attempt ${state.attempt}`
+        : "Syncing room";
+
+  return (
+    <div className="fixed left-1/2 top-3 z-50 -translate-x-1/2 rounded-full border border-stagegold/35 bg-midnight/95 px-3 py-2 text-white shadow-stage backdrop-blur">
+      <div className="flex items-center gap-2">
+        {isConnecting ? (
+          <Loader2 className="h-4 w-4 animate-spin text-stagegold" />
+        ) : (
+          <Radio className="h-4 w-4 text-stagegold" />
+        )}
+        <div className="whitespace-nowrap">
+          <div className="text-[10px] font-black uppercase tracking-[0.22em] text-stagegold">
+            {label}
+          </div>
+          <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-white/55">
+            {detail}
+          </div>
+        </div>
+        <button
+          className="ml-1 inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-white/5 text-white transition hover:bg-white/10"
+          onClick={onResync}
+          title="Resync room"
+          type="button"
+        >
+          <RotateCcw className="h-3.5 w-3.5" />
+        </button>
+      </div>
+    </div>
   );
 }
 
