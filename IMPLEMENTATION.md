@@ -37,10 +37,11 @@ Implemented:
 - Authoring source material is sent to both chat and draft generation. Draft generation
   also persists pasted source text even if the model does not echo a `source_material`
   field in its JSON response.
-- The authoring prompt includes concrete format examples for flag sprint, text input,
-  multiple choice, math, table, source excerpt, list race, ordering, matching,
-  image choice, and hotspot questions. Flag sprint mode is explicitly defined as
-  sequential `sync_open` image prompts with `text_input` answers, not a `list_race`.
+- The authoring prompt includes concrete composable examples for image identification,
+  mixed-media rounds, text input, multiple choice, math, table, source excerpt, list
+  race, ordering, matching, image choice, and hotspot questions. Image identification is
+  modeled as ordinary `sync_open` questions with image prompt blocks and the requested
+  answer widget, not as a special-case quiz type.
 - `Draft now` includes pending text in the message box, so users do not have to hit
   `Send` before drafting from a freshly pasted brief/source snippet.
 - Prompt blocks and answer widgets are modeled/rendered from the start, so the project is

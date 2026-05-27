@@ -50,7 +50,7 @@ type AuthorMessage = {
   content: string;
   quizId?: string;
 };
-type AuthoringMode = "auto" | "classic" | "flag_sprint" | "list_race" | "meta_strategy";
+type AuthoringMode = "auto" | "classic" | "image_sprint" | "list_race" | "meta_strategy";
 
 const authoringModes: Array<{
   id: AuthoringMode;
@@ -72,11 +72,11 @@ const authoringModes: Array<{
       "Create synchronized question rounds with text_input and multiple_choice widgets where appropriate.",
   },
   {
-    id: "flag_sprint",
-    label: "Flag Sprint",
+    id: "image_sprint",
+    label: "Image Sprint",
     icon: Flag,
     instruction:
-      "Create an image-driven sprint using sync_open rounds, not list_race: each question should show one image prompt block and use a text_input answer. Include pass-friendly metadata for a future pass-and-return runner.",
+      "Create an image-identification sprint using sync_open rounds, not list_race: each image question should use an image prompt block and the requested answer widget. This can be flags, maps, diagrams, screenshots, logos, landmarks, or specimens.",
   },
   {
     id: "list_race",
@@ -229,9 +229,10 @@ function buildConversationPrompt({
       product_constraints: [
         "Avoid duplicating nearby existing quizzes unless the user explicitly asks for another version.",
         "Prefer structured prompt_blocks and answer_widget over plain text.",
+        "Treat prompt blocks as composable. A quiz may contain multiple round types, and a single sync_open round may mix text-only, image, math, table, and source-excerpt questions.",
         "Support non-text play: image prompts, table prompts, math blocks, source excerpts, list_race rounds, and metadata for future pass/return flows.",
         "Prefer currently playable answer flows unless the user explicitly requests an experimental format: text_input, multiple_choice, image prompt plus text_input, and list_race.",
-        "For Flag Sprint mode, create sync_open rounds with one image prompt per question and text_input answers. Do not create list_race rounds unless the user explicitly asks for a list race.",
+        "For Image Sprint mode, create sync_open questions with image prompt blocks and the requested answer widget. Do not create list_race rounds unless the user explicitly asks for a list race.",
         "For image or flag quizzes, preserve reliable source image URLs exactly in prompt_blocks[].url; otherwise make the image requirement explicit in metadata and alt/caption fields so assets can be attached later.",
         "If revising a current draft, preserve good material and make only the requested conceptual changes.",
       ],

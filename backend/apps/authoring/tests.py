@@ -85,15 +85,16 @@ class AuthoringSmokeTests(TestCase):
         self.assertEqual(payload["source_material"]["kind"], "text")
         self.assertIn("Cameroon", payload["source_material"]["content"])
 
-    def test_authoring_prompt_includes_flag_sprint_image_example(self):
-        payload = _user_prompt("Create a flag sprint from these rows", "Cameroon, https://example.com/flags/cm.png")
-        flag_example = payload["format_examples"]["flag_sprint"]["round"]
-        question = flag_example["questions"][0]
+    def test_authoring_prompt_includes_composable_image_example(self):
+        payload = _user_prompt("Create an image sprint from these rows", "Cameroon, https://example.com/flags/cm.png")
+        image_example = payload["format_examples"]["image_identification"]["round"]
+        question = image_example["questions"][0]
 
-        self.assertEqual(flag_example["type"], "sync_open")
+        self.assertEqual(image_example["type"], "sync_open")
         self.assertEqual(question["prompt_blocks"][0]["type"], "image")
         self.assertEqual(question["answer_widget"]["type"], "text_input")
-        self.assertIn("Do not use list_race for flag_sprint", " ".join(payload["requirements"]))
+        self.assertIn("A single round may mix image questions", " ".join(payload["format_examples"]["mixed_media_round"]["notes"]))
+        self.assertIn("Treat prompt blocks as composable", " ".join(payload["requirements"]))
 
     def test_image_prompt_blocks_are_preserved(self):
         document = {

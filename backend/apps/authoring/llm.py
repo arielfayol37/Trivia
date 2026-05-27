@@ -19,10 +19,12 @@ do not assume every question is plain text.
 Supported prompt block types: text, image, table, math, source_excerpt, diagram_spec.
 Supported answer widget types: text_input, list_input, multiple_choice, ordering,
 matching, image_choice, hotspot.
-Use the format_examples in the user payload as concrete patterns to copy.
-When the request asks for a flag sprint or image-identification sprint, create
-sync_open questions with image prompt blocks and text_input answers. Do not turn that
-into list_race unless the user explicitly asks players to name all items from memory.
+Use the format_examples in the user payload as composable patterns, not rigid quiz
+templates. Rounds can mix questions with images, text, math, tables, and source excerpts.
+When the request asks for image identification, create ordinary sync_open questions with
+image prompt blocks and the requested answer widget. Do not turn image-identification
+requests into list_race unless the user explicitly asks players to name many items from
+memory from a single prompt.
 """
 
 AUTHORING_CHAT_SYSTEM_PROMPT = """You are an expert quiz producer inside a multiplayer trivia authoring tool.
@@ -170,13 +172,13 @@ OPENAI_QUIZ_RESPONSE_FORMAT = {
 }
 
 FORMAT_EXAMPLES = {
-    "flag_sprint": {
+    "image_identification": {
         "round": {
             "type": "sync_open",
             "config": {
                 "answer_timeout_s": 20,
                 "points_per_question": 10,
-                "runner": "sequential_image_sprint",
+                "runner": "sequential_image_identification",
             },
             "questions": [
                 {
@@ -192,14 +194,66 @@ FORMAT_EXAMPLES = {
                     "canonical_answer": "Cameroon",
                     "acceptable_answers": ["Cameroon", "Republic of Cameroon", "Cameroun"],
                     "judge_mode": "fuzzy",
-                    "metadata": {"source_kind": "country_flag"},
+                    "metadata": {"source_kind": "country_flag", "image_question_kind": "flag"},
                 }
             ],
         },
         "notes": [
-            "Use one question per flag image.",
-            "Preserve source image URLs exactly in prompt_blocks[].url.",
-            "The visible prompt should be the image, not the country name.",
+            "Use one question per image when the game asks players to identify displayed images.",
+            "This pattern also applies to flags, paintings, maps, diagrams, screenshots, logos, landmarks, or specimens.",
+            "Preserve source image URLs exactly in prompt_blocks[].url when provided.",
+            "Do not reveal the answer in visible prompt text or captions.",
+        ],
+    },
+    "mixed_media_round": {
+        "round": {
+            "type": "sync_open",
+            "config": {"answer_timeout_s": 25, "points_per_question": 10},
+            "questions": [
+                {
+                    "prompt_blocks": [
+                        {
+                            "type": "image",
+                            "url": "https://example.com/maps/cameroon.png",
+                            "alt": "Map highlighting Cameroon",
+                        },
+                        {"type": "text", "text": "Which country is highlighted?"},
+                    ],
+                    "answer_widget": {"type": "text_input", "placeholder": "Country"},
+                    "canonical_answer": "Cameroon",
+                    "acceptable_answers": ["Cameroon", "Republic of Cameroon"],
+                    "judge_mode": "fuzzy",
+                },
+                {
+                    "prompt_blocks": [
+                        {"type": "text", "text": "What city is Cameroon's political capital?"}
+                    ],
+                    "answer_widget": {"type": "text_input", "placeholder": "City"},
+                    "canonical_answer": "Yaounde",
+                    "acceptable_answers": ["Yaounde"],
+                    "judge_mode": "fuzzy",
+                },
+                {
+                    "prompt_blocks": [
+                        {
+                            "type": "table",
+                            "columns": ["Clue", "Value"],
+                            "rows": [["Largest city", "Douala"], ["Highest mountain", "Mount Cameroon"]],
+                        }
+                    ],
+                    "answer_widget": {
+                        "type": "multiple_choice",
+                        "choices": ["Cameroon", "Gabon", "Chad", "Nigeria"],
+                    },
+                    "canonical_answer": "Cameroon",
+                    "acceptable_answers": ["Cameroon"],
+                    "judge_mode": "fuzzy",
+                },
+            ],
+        },
+        "notes": [
+            "A single round may mix image questions and non-image questions.",
+            "Choose prompt blocks per question; do not create a new round solely because the prompt block type changes.",
         ],
     },
     "classic_text_input": {
@@ -388,9 +442,10 @@ def _user_prompt(prompt: str, source_text: str) -> dict:
             "Create a static quiz with at least one playable round. Respect the requested format; list_race-only quizzes are allowed when requested.",
             "Set category to one of science, tv, sports, geography, history, general. New generated quizzes should remain status=draft until the user marks them ready.",
             "Use prompt_blocks and answer_widget on every question.",
+            "Treat prompt blocks as composable. A quiz may contain multiple round types, and a single sync_open round may mix text-only, image, math, table, and source-excerpt questions.",
             "Support non-text play when requested: image prompts, table prompts, math blocks, source excerpts, list_race rounds, image_choice, ordering, matching, and hotspot widgets.",
             "Prefer currently playable answer flows unless the user explicitly requests an experimental format: text_input, multiple_choice, image prompt plus text_input, and list_race.",
-            "For flag/image sprint quizzes, create sync_open rounds with one image prompt block per question and a text_input answer. Do not use list_race for flag_sprint unless explicitly requested.",
+            "For image-identification questions, create sync_open questions with image prompt blocks and the requested answer widget. Do not use list_race unless the user asks for a name-all/list-race format.",
             "When source_text contains HTML, rows, or snippets with country names and flag image URLs, extract country-image pairs and preserve those image URLs exactly in prompt_blocks[].url.",
             "For flag/image identification questions, do not reveal the answer in visible prompt text or captions. Use alt text for accessibility only.",
             "If reliable image URLs are not provided, make the image asset requirement explicit in alt/caption/metadata rather than pretending the quiz is pure text.",
