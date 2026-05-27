@@ -89,29 +89,35 @@ class SessionJoinView(APIView):
 
         validated = serializer.validated_data
         session = _get_join_session(validated)
-        if session.status != SessionStatus.LOBBY:
-            return Response(
-                {"detail": "Only lobby sessions can be joined"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
         display_name = validated["display_name"].strip()
         with transaction.atomic():
             locked_session = Session.objects.select_for_update().get(pk=session.pk)
+            if locked_session.status == SessionStatus.ABANDONED:
+                return Response(
+                    {"detail": "This room is closed"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             if _display_name_taken(locked_session, display_name):
                 return Response(
                     {"detail": "That name is already in this room"},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
+            role = (
+                SessionRole.PLAYER
+                if locked_session.status == SessionStatus.LOBBY
+                else SessionRole.SPECTATOR
+            )
             player = SessionPlayer.objects.create(
                 session=locked_session,
                 user=request.user if request.user and request.user.is_authenticated else None,
                 display_name=display_name,
-                role=SessionRole.PLAYER,
+                role=role,
             )
-            _clear_lobby_countdown_state(locked_session)
+            if role == SessionRole.PLAYER:
+                _clear_lobby_countdown_state(locked_session)
 
-        broadcast_session_snapshot_sync(locked_session.id, "session.player_joined")
+        event = "session.player_joined" if player.role == SessionRole.PLAYER else "session.spectator_joined"
+        broadcast_session_snapshot_sync(locked_session.id, event)
         return Response(
             _session_response(locked_session, player.id),
             status=status.HTTP_201_CREATED,
@@ -137,6 +143,9 @@ class SessionPlayerReadyView(APIView):
             pk=player_id,
             session_id=session_id,
         )
+        player_error = _player_game_action_error(player, action="change ready state")
+        if player_error:
+            return player_error
         if player.session.status != SessionStatus.LOBBY:
             return Response(
                 {"detail": "Ready state can only change in the lobby"},
@@ -197,6 +206,10 @@ class SessionSubmitAnswerView(APIView):
                 {"detail": "Answers can only be submitted while playing"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        player = get_object_or_404(SessionPlayer, pk=player_id, session=session)
+        player_error = _player_game_action_error(player, action="submit answers")
+        if player_error:
+            return player_error
         if _deadline_has_elapsed(session):
             _schedule_auto_advance(session, reason="deadline", delay_s=0)
             return Response(
@@ -204,7 +217,6 @@ class SessionSubmitAnswerView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        player = get_object_or_404(SessionPlayer, pk=player_id, session=session)
         phase = (session.state or {}).get("phase")
         if phase == "list_race":
             return _submit_list_race_answer(session, player, serializer.validated_data)
@@ -282,6 +294,10 @@ class SessionPlaceWagerView(APIView):
                 {"detail": "Wagers can only be placed while playing"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        player = get_object_or_404(SessionPlayer, pk=player_id, session=session)
+        player_error = _player_game_action_error(player, action="place wagers")
+        if player_error:
+            return player_error
         if (session.state or {}).get("phase") != "betting":
             return Response(
                 {"detail": "No active betting phase"},
@@ -294,7 +310,6 @@ class SessionPlaceWagerView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        player = get_object_or_404(SessionPlayer, pk=player_id, session=session)
         wager_result = _place_meta_strategy_wager(
             session,
             player,
@@ -319,6 +334,11 @@ class SessionChatView(APIView):
         with transaction.atomic():
             session = get_object_or_404(Session.objects.select_for_update(), pk=session_id)
             player = get_object_or_404(SessionPlayer, pk=player_id, session=session)
+            if player.left_at is not None:
+                return Response(
+                    {"detail": "This participant has left the room"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             state = session.state or {}
             messages = state.setdefault("chat_messages", [])
             if not isinstance(messages, list):
@@ -382,6 +402,9 @@ class SessionContinueView(APIView):
                 )
 
             player = get_object_or_404(SessionPlayer, pk=player_id, session=session)
+            player_error = _player_game_action_error(player, action="continue")
+            if player_error:
+                return player_error
             question = _current_question(session)
             if not question or (session.state or {}).get("phase") != "question":
                 return Response(
@@ -490,6 +513,20 @@ def _get_join_session(validated: dict) -> Session:
 
 def _display_name_taken(session: Session, display_name: str) -> bool:
     return session.players.filter(display_name__iexact=display_name, left_at__isnull=True).exists()
+
+
+def _player_game_action_error(player: SessionPlayer, *, action: str) -> Response | None:
+    if player.left_at is not None:
+        return Response(
+            {"detail": "This participant has left the room"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if player.role != SessionRole.PLAYER:
+        return Response(
+            {"detail": f"Spectators can watch and chat, but cannot {action}"},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    return None
 
 
 def _host_action_error(session: Session, player_id, *, action: str) -> Response | None:

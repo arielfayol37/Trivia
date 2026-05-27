@@ -9,7 +9,7 @@ from django.utils import timezone
 
 from apps.authoring.ops import AuthoringContext, create_quiz_from_document
 from apps.authoring.sample import sample_quiz_document
-from apps.sessions.models import SessionStatus
+from apps.sessions.models import SessionRole, SessionStatus
 from apps.sessions.views import (
     _auto_advance_session,
     _auto_start_session,
@@ -111,6 +111,92 @@ class SessionApiTests(TestCase):
 
         self.assertEqual(join_response.status_code, 400)
         self.assertEqual(join_response.json()["detail"], "That name is already in this room")
+
+    def test_join_playing_session_admits_spectator(self):
+        create_response = self.client.post(
+            "/api/sessions/",
+            data={"quiz_id": str(self.quiz.id), "display_name": "Ariel", "question_count": 1},
+            content_type="application/json",
+        )
+        session_id = create_response.json()["session"]["id"]
+        start_response = self._start_session(session_id, create_response.json()["player_id"])
+
+        join_response = self.client.post(
+            "/api/sessions/join/",
+            data={"session_id": session_id, "display_name": "Watcher"},
+            content_type="application/json",
+        )
+
+        self.assertEqual(start_response.status_code, 200)
+        self.assertEqual(join_response.status_code, 201)
+        payload = join_response.json()
+        self.assertEqual(payload["session"]["status"], SessionStatus.PLAYING)
+        spectator = next(player for player in payload["session"]["players"] if player["display_name"] == "Watcher")
+        self.assertEqual(spectator["role"], SessionRole.SPECTATOR)
+        self.assertFalse(spectator["is_host"])
+
+    def test_spectator_can_chat_but_cannot_submit_or_continue(self):
+        create_response = self.client.post(
+            "/api/sessions/",
+            data={"quiz_id": str(self.quiz.id), "display_name": "Ariel", "question_count": 1},
+            content_type="application/json",
+        )
+        session_id = create_response.json()["session"]["id"]
+        host_id = create_response.json()["player_id"]
+        start_response = self._start_session(session_id, host_id)
+        join_response = self.client.post(
+            "/api/sessions/join/",
+            data={"session_id": session_id, "display_name": "Watcher"},
+            content_type="application/json",
+        )
+        spectator_id = join_response.json()["player_id"]
+
+        chat_response = self.client.post(
+            f"/api/sessions/{session_id}/players/{spectator_id}/chat/",
+            data={"message": "watching this one"},
+            content_type="application/json",
+        )
+        submit_response = self.client.post(
+            f"/api/sessions/{session_id}/players/{spectator_id}/answer/",
+            data={"submitted_text": start_response.json()["quiz"]["rounds"][0]["questions"][0]["canonical_answer"]},
+            content_type="application/json",
+        )
+        wager_response = self.client.post(
+            f"/api/sessions/{session_id}/players/{spectator_id}/wager/",
+            data={"points": 1},
+            content_type="application/json",
+        )
+        continue_response = self.client.post(
+            f"/api/sessions/{session_id}/players/{spectator_id}/continue/",
+            content_type="application/json",
+        )
+
+        self.assertEqual(chat_response.status_code, 200)
+        self.assertEqual(chat_response.json()["state"]["chat_messages"][-1]["display_name"], "Watcher")
+        self.assertEqual(submit_response.status_code, 403)
+        self.assertIn("Spectators", submit_response.json()["detail"])
+        self.assertEqual(wager_response.status_code, 403)
+        self.assertIn("Spectators", wager_response.json()["detail"])
+        self.assertEqual(continue_response.status_code, 403)
+        self.assertIn("Spectators", continue_response.json()["detail"])
+
+    def test_join_abandoned_session_is_rejected(self):
+        create_response = self.client.post(
+            "/api/sessions/",
+            data={"quiz_id": str(self.quiz.id), "display_name": "Ariel"},
+            content_type="application/json",
+        )
+        session_id = create_response.json()["session"]["id"]
+        self._leave_session(session_id, create_response.json()["player_id"])
+
+        join_response = self.client.post(
+            "/api/sessions/join/",
+            data={"session_id": session_id, "display_name": "Watcher"},
+            content_type="application/json",
+        )
+
+        self.assertEqual(join_response.status_code, 400)
+        self.assertEqual(join_response.json()["detail"], "This room is closed")
 
     def test_invite_preview_returns_room_summary_without_questions(self):
         create_response = self.client.post(

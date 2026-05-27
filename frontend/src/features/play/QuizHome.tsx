@@ -979,15 +979,27 @@ function InviteJoinGate({
   sessionError: string | null;
 }) {
   const previewStatus = invitePreview?.status;
-  const canJoin = !invitePreviewError && (!previewStatus || previewStatus === "lobby");
+  const canJoin = !invitePreviewError && (!previewStatus || previewStatus !== "abandoned");
   const statusLabel =
     previewStatus === "playing"
-      ? "Already playing"
+      ? "Live now"
       : previewStatus === "finished"
         ? "Finished"
         : previewStatus === "abandoned"
           ? "Closed"
           : "Lobby";
+  const entryLabel =
+    previewStatus === "playing"
+      ? "Spectator entry"
+      : previewStatus === "finished"
+        ? "Results entry"
+        : "Player entry";
+  const submitLabel =
+    previewStatus === "playing"
+      ? "Watch live"
+      : previewStatus === "finished"
+        ? "View results"
+        : "Join the show";
 
   return (
     <div className="flex min-h-screen items-center justify-center px-5 py-8">
@@ -1085,7 +1097,7 @@ function InviteJoinGate({
           >
             <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.4em] text-aqua">
               <LogIn className="h-4 w-4" />
-              Player entry
+              {entryLabel}
             </div>
             <div className="mt-5 grid gap-4">
               <label className="block">
@@ -1119,9 +1131,19 @@ function InviteJoinGate({
                 variant="stage"
               >
                 {isJoiningSession ? <Loader2 className="h-4 w-4 animate-spin" /> : <Users className="h-4 w-4" />}
-                Join the show
+                {submitLabel}
               </Button>
             </div>
+            {previewStatus === "playing" && canJoin ? (
+              <div className="mt-4 rounded-md border border-aqua/30 bg-aqua/10 px-3 py-2 text-sm font-semibold text-aqua">
+                This game has started, so you will join as a spectator.
+              </div>
+            ) : null}
+            {previewStatus === "finished" && canJoin ? (
+              <div className="mt-4 rounded-md border border-stagegold/30 bg-stagegold/10 px-3 py-2 text-sm font-semibold text-stagegold">
+                This game is over, but you can still view the results and chat.
+              </div>
+            ) : null}
             {!canJoin ? (
               <div className="mt-4 rounded-md border border-stagegold/30 bg-stagegold/10 px-3 py-2 text-sm font-semibold text-stagegold">
                 This room is {statusLabel.toLowerCase()}.
@@ -1840,6 +1862,7 @@ function BettingRoom({
   const round = currentRound(session);
   const localPlayer = session.players.find((player) => player.id === localPlayerId);
   const isHost = Boolean(localPlayer?.is_host);
+  const isSpectator = localPlayer?.role === "spectator";
   const state = asRecord(session.state);
   const metaStrategy = asRecord(state.meta_strategy);
   const current = asRecord(metaStrategy.current);
@@ -1924,75 +1947,81 @@ function BettingRoom({
               <QuestionTimer session={session} />
 
               <div className="rounded-xl border border-white/15 bg-white/5 p-4">
-                <div className="text-[10px] font-bold uppercase tracking-[0.4em] text-white/55">
-                  Your wager
-                </div>
+                {isSpectator ? (
+                  <SpectatorNotice message="Wagers are player-only. You can watch the clue, scores, and chat while the room decides." />
+                ) : (
+                  <>
+                    <div className="text-[10px] font-bold uppercase tracking-[0.4em] text-white/55">
+                      Your wager
+                    </div>
 
-                <div className="mt-3 grid grid-cols-[repeat(auto-fit,minmax(3.25rem,1fr))] gap-2">
-                  {wagerOptions.map((points) => (
-                    <button
-                      className={`h-12 rounded-md border text-lg font-black tabular-nums transition ${
-                        selectedBet === points
-                          ? "border-stagegold bg-stagegold text-midnight"
-                          : localUsedWagers.has(points)
-                            ? "border-white/10 bg-white/10 text-white/35"
-                          : "border-white/15 bg-white text-midnight hover:border-stagegold hover:bg-pale"
-                      } disabled:cursor-not-allowed disabled:opacity-50`}
+                    <div className="mt-3 grid grid-cols-[repeat(auto-fit,minmax(3.25rem,1fr))] gap-2">
+                      {wagerOptions.map((points) => (
+                        <button
+                          className={`h-12 rounded-md border text-lg font-black tabular-nums transition ${
+                            selectedBet === points
+                              ? "border-stagegold bg-stagegold text-midnight"
+                              : localUsedWagers.has(points)
+                                ? "border-white/10 bg-white/10 text-white/35"
+                              : "border-white/15 bg-white text-midnight hover:border-stagegold hover:bg-pale"
+                          } disabled:cursor-not-allowed disabled:opacity-50`}
+                          disabled={
+                            isUpdatingSession ||
+                            lockedPoints !== null ||
+                            !localPlayerId ||
+                            localUsedWagers.has(points)
+                          }
+                          key={points}
+                          onClick={() => setSelectedBet(points)}
+                          type="button"
+                          title={localUsedWagers.has(points) ? "Already used in this round" : undefined}
+                        >
+                          {points}
+                        </button>
+                      ))}
+                    </div>
+                    {localUsedWagers.size ? (
+                      <div className="mt-2 text-xs font-semibold text-white/55">
+                        Already used this round: {[...localUsedWagers].sort((a, b) => a - b).join(", ")}
+                      </div>
+                    ) : wagerOptions.length ? (
+                      <div className="mt-2 text-xs font-semibold text-white/55">
+                        {wagerOptions.length} point {wagerOptions.length === 1 ? "card" : "cards"} in this round
+                      </div>
+                    ) : null}
+
+                    <Button
+                      className="mt-3 w-full uppercase tracking-wider"
                       disabled={
                         isUpdatingSession ||
                         lockedPoints !== null ||
                         !localPlayerId ||
-                        localUsedWagers.has(points)
+                        localUsedWagers.has(selectedBet)
                       }
-                      key={points}
-                      onClick={() => setSelectedBet(points)}
+                      onClick={() => onPlaceWager(selectedBet)}
                       type="button"
-                      title={localUsedWagers.has(points) ? "Already used in this round" : undefined}
+                      variant="stage"
                     >
-                      {points}
-                    </button>
-                  ))}
-                </div>
-                {localUsedWagers.size ? (
-                  <div className="mt-2 text-xs font-semibold text-white/55">
-                    Already used this round: {[...localUsedWagers].sort((a, b) => a - b).join(", ")}
-                  </div>
-                ) : wagerOptions.length ? (
-                  <div className="mt-2 text-xs font-semibold text-white/55">
-                    {wagerOptions.length} point {wagerOptions.length === 1 ? "card" : "cards"} in this round
-                  </div>
-                ) : null}
+                      {lockedPoints !== null ? (
+                        <>
+                          <CheckCircle2 className="h-4 w-4" />
+                          Locked at {lockedPoints}
+                        </>
+                      ) : isUpdatingSession ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <>
+                          <Sparkles className="h-4 w-4" />
+                          Lock wager
+                        </>
+                      )}
+                    </Button>
 
-                <Button
-                  className="mt-3 w-full uppercase tracking-wider"
-                  disabled={
-                    isUpdatingSession ||
-                    lockedPoints !== null ||
-                    !localPlayerId ||
-                    localUsedWagers.has(selectedBet)
-                  }
-                  onClick={() => onPlaceWager(selectedBet)}
-                  type="button"
-                  variant="stage"
-                >
-                  {lockedPoints !== null ? (
-                    <>
-                      <CheckCircle2 className="h-4 w-4" />
-                      Locked at {lockedPoints}
-                    </>
-                  ) : isUpdatingSession ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <>
-                      <Sparkles className="h-4 w-4" />
-                      Lock wager
-                    </>
-                  )}
-                </Button>
-
-                {sessionError ? (
-                  <div className="mt-3 text-sm font-semibold text-inviteError">{sessionError}</div>
-                ) : null}
+                    {sessionError ? (
+                      <div className="mt-3 text-sm font-semibold text-inviteError">{sessionError}</div>
+                    ) : null}
+                  </>
+                )}
               </div>
 
               <div className="rounded-xl border border-white/15 bg-white/5 p-4">
@@ -2089,6 +2118,7 @@ function ListRaceRoom({
     localPlayerId ? asRecord(asRecord(listRace.last_submission)[localPlayerId]) : {};
   const localPlayer = session.players.find((player) => player.id === localPlayerId);
   const isHost = Boolean(localPlayer?.is_host);
+  const isSpectator = localPlayer?.role === "spectator";
 
   useEffect(() => {
     window.scrollTo({ left: 0, top: 0, behavior: "auto" });
@@ -2138,54 +2168,60 @@ function ListRaceRoom({
             <aside className="space-y-4">
               <QuestionTimer session={session} />
 
-              <form
-                className="rounded-xl border border-white/15 bg-white/5 p-4"
-                onSubmit={handleSubmit}
-              >
-                <div className="text-[10px] font-bold uppercase tracking-[0.4em] text-white/55">
-                  Answer
+              {isSpectator ? (
+                <div className="rounded-xl border border-white/15 bg-white/5 p-4">
+                  <SpectatorNotice message="List race answers are player-only. Watch the scoreboard climb and use chat freely." />
                 </div>
-                <Input
-                  className="mt-3 h-12 border-white/15 bg-white text-midnight"
-                  disabled={isUpdatingSession || !localPlayerId}
-                  onChange={(event) => setAnswer(event.target.value)}
-                  placeholder="Type an item"
-                  value={answer}
-                />
-                <Button
-                  className="mt-3 w-full uppercase tracking-wider"
-                  disabled={isUpdatingSession || !answer.trim() || !localPlayerId}
-                  type="submit"
-                  variant="stage"
+              ) : (
+                <form
+                  className="rounded-xl border border-white/15 bg-white/5 p-4"
+                  onSubmit={handleSubmit}
                 >
-                  {isUpdatingSession ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <SendHorizontal className="h-4 w-4" />
-                  )}
-                  Submit
-                </Button>
-
-                {lastSubmission.submitted ? (
-                  <div
-                    className={`mt-3 rounded-md px-3 py-2 text-sm font-semibold ${
-                      lastSubmission.accepted
-                        ? "bg-aqua text-midnight"
-                        : "bg-coral text-white"
-                    }`}
-                  >
-                    {lastSubmission.accepted
-                      ? `Accepted: ${lastSubmission.canonical ?? lastSubmission.submitted}`
-                      : lastSubmission.duplicate
-                        ? "Already found"
-                        : "Not on the list"}
+                  <div className="text-[10px] font-bold uppercase tracking-[0.4em] text-white/55">
+                    Answer
                   </div>
-                ) : null}
+                  <Input
+                    className="mt-3 h-12 border-white/15 bg-white text-midnight"
+                    disabled={isUpdatingSession || !localPlayerId}
+                    onChange={(event) => setAnswer(event.target.value)}
+                    placeholder="Type an item"
+                    value={answer}
+                  />
+                  <Button
+                    className="mt-3 w-full uppercase tracking-wider"
+                    disabled={isUpdatingSession || !answer.trim() || !localPlayerId}
+                    type="submit"
+                    variant="stage"
+                  >
+                    {isUpdatingSession ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <SendHorizontal className="h-4 w-4" />
+                    )}
+                    Submit
+                  </Button>
 
-                {sessionError ? (
-                  <div className="mt-3 text-sm font-semibold text-inviteError">{sessionError}</div>
-                ) : null}
-              </form>
+                  {lastSubmission.submitted ? (
+                    <div
+                      className={`mt-3 rounded-md px-3 py-2 text-sm font-semibold ${
+                        lastSubmission.accepted
+                          ? "bg-aqua text-midnight"
+                          : "bg-coral text-white"
+                      }`}
+                    >
+                      {lastSubmission.accepted
+                        ? `Accepted: ${lastSubmission.canonical ?? lastSubmission.submitted}`
+                        : lastSubmission.duplicate
+                          ? "Already found"
+                          : "Not on the list"}
+                    </div>
+                  ) : null}
+
+                  {sessionError ? (
+                    <div className="mt-3 text-sm font-semibold text-inviteError">{sessionError}</div>
+                  ) : null}
+                </form>
+              )}
 
               <Button
                 className="w-full uppercase tracking-wider"
@@ -2240,6 +2276,7 @@ function PlayingRoom({
   const round = currentRound(session);
   const localPlayer = session.players.find((player) => player.id === localPlayerId);
   const isHost = Boolean(localPlayer?.is_host);
+  const isSpectator = localPlayer?.role === "spectator";
   const [introShownForRoundId, setIntroShownForRoundId] = useState<string | null>(null);
   const [introVisible, setIntroVisible] = useState(false);
   const [nowMs, setNowMs] = useState(Date.now());
@@ -2302,6 +2339,7 @@ function PlayingRoom({
     typeof submission.points_awarded === "number" ? submission.points_awarded : 0;
   const questionClosed = questionHasClosed(session, nowMs);
   const shouldRevealAnswers = hasSubmitted || questionClosed;
+  const canSubmitAnswer = Boolean(localPlayerId && !isSpectator);
   const activePlayers = activeGamePlayers(session);
   const questionNextReady = asRecord(asRecord(asRecord(session.state).next_ready)[question.id]);
   const localNextReady = Boolean(localPlayerId && questionNextReady[localPlayerId]);
@@ -2350,35 +2388,41 @@ function PlayingRoom({
               <QuestionTimer session={session} />
 
               <div className="rounded-xl border border-white/15 bg-white/5 p-4">
-                <div className="text-[10px] font-bold uppercase tracking-[0.4em] text-white/55">
-                  Your answer
-                </div>
-                <div className="mt-3">
-                  <AnswerEntry
-                    disabled={isUpdatingSession || hasSubmitted || questionClosed || !localPlayerId}
-                    hasSubmitted={hasSubmitted}
-                    onSubmit={onSubmitAnswer}
-                    question={question}
-                    submittedText={
-                      typeof submission.submitted_text === "string" ? submission.submitted_text : ""
-                    }
-                  />
-                </div>
+                {isSpectator ? (
+                  <SpectatorNotice message="You are watching this room. Answers unlock when the question closes." />
+                ) : (
+                  <>
+                    <div className="text-[10px] font-bold uppercase tracking-[0.4em] text-white/55">
+                      Your answer
+                    </div>
+                    <div className="mt-3">
+                      <AnswerEntry
+                        disabled={isUpdatingSession || hasSubmitted || questionClosed || !canSubmitAnswer}
+                        hasSubmitted={hasSubmitted}
+                        onSubmit={onSubmitAnswer}
+                        question={question}
+                        submittedText={
+                          typeof submission.submitted_text === "string" ? submission.submitted_text : ""
+                        }
+                      />
+                    </div>
 
-                {hasSubmitted ? (
-                  <VerdictReveal
-                    accepted={acceptedVerdict}
-                    key={`${question.id}:${acceptedVerdict ? "accepted" : "wrong"}`}
-                    pointsAwarded={pointsAwarded}
-                  />
-                ) : null}
+                    {hasSubmitted ? (
+                      <VerdictReveal
+                        accepted={acceptedVerdict}
+                        key={`${question.id}:${acceptedVerdict ? "accepted" : "wrong"}`}
+                        pointsAwarded={pointsAwarded}
+                      />
+                    ) : null}
 
-                {sessionError ? (
-                  <div className="mt-3 text-sm font-semibold text-inviteError">{sessionError}</div>
-                ) : null}
+                    {sessionError ? (
+                      <div className="mt-3 text-sm font-semibold text-inviteError">{sessionError}</div>
+                    ) : null}
+                  </>
+                )}
               </div>
 
-              {shouldRevealAnswers ? (
+              {shouldRevealAnswers && !isSpectator ? (
                 <div className="rounded-xl border border-stagegold/25 bg-stagegold/10 p-4">
                   <Button
                     className="w-full uppercase tracking-wider"
@@ -2402,27 +2446,30 @@ function PlayingRoom({
                 </div>
               ) : null}
 
-              <Button
-                className="w-full uppercase tracking-wider"
-                disabled={!isHost || isUpdatingSession}
-                onClick={onAdvanceQuestion}
-                type="button"
-                variant="stage"
-              >
-                {isUpdatingSession ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Play className="h-4 w-4" />
-                )}
-                {shouldRevealAnswers ? "Force next" : "Skip / next"}
-              </Button>
-              {!isHost ? (
+              {isHost ? (
+                <Button
+                  className="w-full uppercase tracking-wider"
+                  disabled={isUpdatingSession}
+                  onClick={onAdvanceQuestion}
+                  type="button"
+                  variant="stage"
+                >
+                  {isUpdatingSession ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Play className="h-4 w-4" />
+                  )}
+                  {shouldRevealAnswers ? "Force next" : "Skip / next"}
+                </Button>
+              ) : (
                 <div className="text-xs text-white/55">
-                  {shouldRevealAnswers
-                    ? "Everyone can tap Next to move faster."
-                    : "Questions advance automatically."}
+                  {isSpectator
+                    ? "Watching live. Players control the pace."
+                    : shouldRevealAnswers
+                      ? "Everyone can tap Next to move faster."
+                      : "Questions advance automatically."}
                 </div>
-              ) : null}
+              )}
             </aside>
           </div>
         </section>
@@ -2473,6 +2520,18 @@ function VerdictReveal({
         +{pointsAwarded} {pointsAwarded === 1 ? "point" : "points"}
       </div>
     </motion.div>
+  );
+}
+
+function SpectatorNotice({ message }: { message: string }) {
+  return (
+    <div className="rounded-xl border border-aqua/30 bg-aqua/10 p-4">
+      <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.35em] text-aqua">
+        <Radio className="h-4 w-4" />
+        Spectating
+      </div>
+      <div className="mt-2 text-sm font-semibold leading-6 text-white/75">{message}</div>
+    </div>
   );
 }
 
@@ -3136,10 +3195,15 @@ function RoomChatPanel({
 }
 
 function Chyron({ session }: { session: LiveSession }) {
+  const players = session.players.filter((player) => player.role === "player");
+  const spectatorCount = session.players.filter(
+    (player) => player.role === "spectator" && player.left_at === null,
+  ).length;
+
   return (
     <div className="fixed inset-x-0 bottom-0 z-20 border-t border-white/10 bg-midnight/95 px-4 py-3 backdrop-blur">
       <div className="mx-auto flex max-w-6xl items-center justify-center gap-3 overflow-x-auto">
-        {session.players.map((player, index) => {
+        {players.map((player, index) => {
           const presence = playerPresence(session, player.id);
           return (
             <div
@@ -3158,6 +3222,12 @@ function Chyron({ session }: { session: LiveSession }) {
             </div>
           );
         })}
+        {spectatorCount ? (
+          <div className="flex shrink-0 items-center gap-2 rounded-full border border-aqua/25 bg-aqua/10 px-3 py-1.5 text-xs font-black uppercase tracking-[0.16em] text-aqua">
+            <Radio className="h-3.5 w-3.5" />
+            {spectatorCount} watching
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -3215,9 +3285,9 @@ function FinishedRoom({
 }) {
   const rankedPlayers = useMemo(
     () =>
-      [...session.players].sort(
-        (a, b) => scoreFor(session, b.id) - scoreFor(session, a.id),
-      ),
+      session.players
+        .filter((player) => player.role === "player")
+        .sort((a, b) => scoreFor(session, b.id) - scoreFor(session, a.id)),
     [session],
   );
   const reviewQuestions = useMemo(() => playedQuestions(session), [session]);

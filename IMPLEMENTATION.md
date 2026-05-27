@@ -78,6 +78,10 @@ Implemented:
     text for the active question.
   - Session joins reject duplicate display names case-insensitively, so a room cannot
     have two indistinguishable "Player"/same-name entries.
+  - Late joiners to playing or finished rooms are admitted as spectators. Spectators can
+    watch questions/results and use room chat, but server-side guards prevent them from
+    answering, wagering, changing ready state, or advancing questions; they are excluded
+    from scoring and active-player advancement gates.
   - Players can leave a room cleanly. Left players no longer block lobby readiness or
     gameplay advancement, their names can be reused, the host role migrates in lobby,
     and empty unfinished rooms are abandoned.
@@ -125,6 +129,8 @@ Implemented:
     unread count instead of taking permanent screen space.
   - Correct answer and player submissions now reveal in a fixed compact dock above the
     score chyron, reducing scroll on phone-sized screens.
+  - Invite links to active/finished games present a focused spectator/results entry
+    instead of looking like a broken lobby link.
   - Finished games include a question review rail with the prompt, correct answer,
     accepted alternatives, each player's submission, and awarded points.
   - Mobile form controls use 16px text to avoid iOS/Safari zooming into focused answer
@@ -150,8 +156,8 @@ Still not done:
 - Fully server-authoritative multiplayer. WebSockets now broadcast snapshots and the
   backend owns basic auto-advance, but REST still performs player actions and the
   scheduler is in-process rather than a durable Redis/Celery-style job runner.
-- Robust disconnect/reconnect, host migration, and late-join spectator mode. Current
-  presence is socket-count based and current player-response reveal is UI-gated, not
+- Robust disconnect/reconnect and production identity hardening. Current presence is
+  socket-count based and current player-response reveal is UI-gated, not
   security-redacted per player.
 - Full live support for all answer widgets and round types (`list_input`, `hotspot`,
   richer `meta_strategy` variants, full `buzz_in`). `image_choice`, `ordering`, and
@@ -462,7 +468,8 @@ for every question.
    - Hybrid start: auto-start countdown when all players are ready, plus host "Start
      now" override.
    - Lobby chat panel.
-   - Remaining: host migration and late-join spectator handling.
+   - Remaining: production-grade active-game host migration and signed participant
+     identity.
 5. WS protocol message types (exhaustive list in `apps/realtime/protocol.py`):
    - `lobby.state`, `lobby.player_joined`, `lobby.player_left`, `lobby.ready_changed`,
      `lobby.chat_message`, `lobby.start_requested`
@@ -707,6 +714,8 @@ questions.
    - Joining after `status=playing` admits as `SessionPlayer` with `role="spectator"`.
    - Spectator UI hides answer inputs and shows everything else (questions, scores,
      chat).
+   - Remaining polish: spectator caps, dedicated spectator controls, and optional
+     spectator-only chat.
 3. Solo (N=1) UX polish:
    - "Play solo" button on each quiz detail page.
    - Buzz-in degenerate mode UI explicitly says "buzz-in (solo): answer within Xs".
