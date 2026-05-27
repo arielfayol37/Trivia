@@ -157,6 +157,15 @@ export function setSessionPlayerReady(sessionId: string, playerId: string, isRea
   );
 }
 
+export function leaveSession(sessionId: string, playerId: string) {
+  return request<LiveSession>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/players/${encodeURIComponent(playerId)}/leave/`,
+    {
+      method: "POST",
+    },
+  );
+}
+
 export function startSession(sessionId: string, playerId: string) {
   return request<LiveSession>(`/api/sessions/${encodeURIComponent(sessionId)}/start/`, {
     method: "POST",

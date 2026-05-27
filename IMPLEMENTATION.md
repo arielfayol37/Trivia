@@ -75,6 +75,9 @@ Implemented:
     text for the active question.
   - Session joins reject duplicate display names case-insensitively, so a room cannot
     have two indistinguishable "Player"/same-name entries.
+  - Players can leave a room cleanly. Left players no longer block lobby readiness or
+    gameplay advancement, their names can be reused, the host role migrates in lobby,
+    and empty unfinished rooms are abandoned.
   - Basic session finish flow.
   - Post-game actions: play again, browse same-topic quizzes, or return home.
   - Room chat persists in session state and is available in lobby, play, and finished

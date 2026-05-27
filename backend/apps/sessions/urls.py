@@ -8,6 +8,7 @@ from apps.sessions.views import (
     SessionInvitePreviewView,
     SessionJoinView,
     SessionNextQuestionView,
+    SessionPlayerLeaveView,
     SessionPlayerReadyView,
     SessionPlaceWagerView,
     SessionStartView,
@@ -29,6 +30,11 @@ urlpatterns = [
         "<uuid:session_id>/players/<uuid:player_id>/ready/",
         SessionPlayerReadyView.as_view(),
         name="session-player-ready",
+    ),
+    path(
+        "<uuid:session_id>/players/<uuid:player_id>/leave/",
+        SessionPlayerLeaveView.as_view(),
+        name="session-player-leave",
     ),
     path(
         "<uuid:session_id>/players/<uuid:player_id>/answer/",

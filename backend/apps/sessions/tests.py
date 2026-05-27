@@ -42,6 +42,12 @@ class SessionApiTests(TestCase):
             content_type="application/json",
         )
 
+    def _leave_session(self, session_id: str, player_id: str):
+        return self.client.post(
+            f"/api/sessions/{session_id}/players/{player_id}/leave/",
+            content_type="application/json",
+        )
+
     def test_create_session_returns_invite_code_and_host_player(self):
         response = self.client.post(
             "/api/sessions/",
@@ -125,6 +131,70 @@ class SessionApiTests(TestCase):
         self.assertEqual(payload["player_count"], 1)
         self.assertEqual(payload["players"][0]["display_name"], "Ariel")
         self.assertTrue(payload["players"][0]["is_host"])
+
+    def test_player_leave_allows_name_reuse(self):
+        create_response = self.client.post(
+            "/api/sessions/",
+            data={"quiz_id": str(self.quiz.id), "display_name": "Ariel"},
+            content_type="application/json",
+        )
+        session_id = create_response.json()["session"]["id"]
+        join_response = self.client.post(
+            "/api/sessions/join/",
+            data={"session_id": session_id, "display_name": "Friend"},
+            content_type="application/json",
+        )
+        player_id = join_response.json()["player_id"]
+
+        leave_response = self._leave_session(session_id, player_id)
+        rejoin_response = self.client.post(
+            "/api/sessions/join/",
+            data={"session_id": session_id, "display_name": "Friend"},
+            content_type="application/json",
+        )
+
+        self.assertEqual(leave_response.status_code, 200)
+        left_player = next(player for player in leave_response.json()["players"] if player["id"] == player_id)
+        self.assertIsNotNone(left_player["left_at"])
+        self.assertEqual(rejoin_response.status_code, 201)
+
+    def test_host_leave_migrates_lobby_host(self):
+        create_response = self.client.post(
+            "/api/sessions/",
+            data={"quiz_id": str(self.quiz.id), "display_name": "Ariel"},
+            content_type="application/json",
+        )
+        session_id = create_response.json()["session"]["id"]
+        host_id = create_response.json()["player_id"]
+        join_response = self.client.post(
+            "/api/sessions/join/",
+            data={"session_id": session_id, "display_name": "Friend"},
+            content_type="application/json",
+        )
+        friend_id = join_response.json()["player_id"]
+
+        leave_response = self._leave_session(session_id, host_id)
+
+        self.assertEqual(leave_response.status_code, 200)
+        players_by_id = {player["id"]: player for player in leave_response.json()["players"]}
+        self.assertFalse(players_by_id[host_id]["is_host"])
+        self.assertTrue(players_by_id[friend_id]["is_host"])
+        self.assertEqual(leave_response.json()["status"], SessionStatus.LOBBY)
+
+    def test_last_player_leave_abandons_lobby(self):
+        create_response = self.client.post(
+            "/api/sessions/",
+            data={"quiz_id": str(self.quiz.id), "display_name": "Ariel"},
+            content_type="application/json",
+        )
+        session_id = create_response.json()["session"]["id"]
+        player_id = create_response.json()["player_id"]
+
+        leave_response = self._leave_session(session_id, player_id)
+
+        self.assertEqual(leave_response.status_code, 200)
+        self.assertEqual(leave_response.json()["status"], SessionStatus.ABANDONED)
+        self.assertEqual(leave_response.json()["state"]["phase"], "abandoned")
 
     def test_ready_endpoint_updates_player_state(self):
         create_response = self.client.post(
@@ -794,6 +864,41 @@ class SessionApiTests(TestCase):
         session.state = state
         session.save(update_fields=["state"])
 
+        self.client.post(
+            f"/api/sessions/{session_id}/players/{host_id}/answer/",
+            data={"submitted_text": canonical_answer},
+            content_type="application/json",
+        )
+
+        continue_response = self.client.post(
+            f"/api/sessions/{session_id}/players/{host_id}/continue/",
+            content_type="application/json",
+        )
+
+        self.assertEqual(continue_response.status_code, 200)
+        self.assertEqual(continue_response.json()["state"]["question_index"], 1)
+        self.assertNotEqual(continue_response.json()["state"]["question_id"], first_question_id)
+
+    def test_left_player_does_not_block_continue_advance(self):
+        create_response = self.client.post(
+            "/api/sessions/",
+            data={"quiz_id": str(self.quiz.id), "display_name": "Ariel", "question_count": 2},
+            content_type="application/json",
+        )
+        create_payload = create_response.json()
+        session_id = create_payload["session"]["id"]
+        host_id = create_payload["player_id"]
+        join_response = self.client.post(
+            "/api/sessions/join/",
+            data={"session_id": session_id, "display_name": "Friend"},
+            content_type="application/json",
+        )
+        friend_id = join_response.json()["player_id"]
+        start_response = self._start_session(session_id, host_id)
+        first_question_id = start_response.json()["state"]["question_id"]
+        canonical_answer = start_response.json()["quiz"]["rounds"][0]["questions"][0]["canonical_answer"]
+
+        self._leave_session(session_id, friend_id)
         self.client.post(
             f"/api/sessions/{session_id}/players/{host_id}/answer/",
             data={"submitted_text": canonical_answer},

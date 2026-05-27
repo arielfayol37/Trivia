@@ -167,7 +167,7 @@ class SessionStartView(APIView):
                 {"detail": "Only lobby sessions can be started"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        if not session.players.filter(role=SessionRole.PLAYER).exists():
+        if not session.players.filter(role=SessionRole.PLAYER, left_at__isnull=True).exists():
             return Response(
                 {"detail": "A session needs at least one player"},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -341,6 +341,36 @@ class SessionChatView(APIView):
         return Response(SessionSerializer(refreshed).data)
 
 
+class SessionPlayerLeaveView(APIView):
+    def post(self, _request, session_id, player_id):
+        with transaction.atomic():
+            session = get_object_or_404(Session.objects.select_for_update(), pk=session_id)
+            player = get_object_or_404(
+                SessionPlayer.objects.select_for_update(),
+                pk=player_id,
+                session=session,
+            )
+            if player.left_at is None:
+                was_host = player.is_host
+                player.left_at = timezone.now()
+                player.is_ready = False
+                player.is_host = False
+                player.save(update_fields=["left_at", "is_ready", "is_host"])
+
+                if was_host:
+                    _assign_next_host(session)
+
+                if not _has_active_players(session):
+                    _abandon_session(session)
+                elif session.status == SessionStatus.LOBBY:
+                    _sync_lobby_countdown(session)
+
+        refreshed = _session_queryset().get(pk=session_id)
+        sync_session_after_presence_change(session_id)
+        broadcast_session_snapshot_sync(session_id, "session.player_left")
+        return Response(SessionSerializer(refreshed).data)
+
+
 class SessionContinueView(APIView):
     def post(self, _request, session_id, player_id):
         with transaction.atomic():
@@ -459,7 +489,7 @@ def _get_join_session(validated: dict) -> Session:
 
 
 def _display_name_taken(session: Session, display_name: str) -> bool:
-    return session.players.filter(display_name__iexact=display_name).exists()
+    return session.players.filter(display_name__iexact=display_name, left_at__isnull=True).exists()
 
 
 def _host_action_error(session: Session, player_id, *, action: str) -> Response | None:
@@ -481,6 +511,39 @@ def _host_action_error(session: Session, player_id, *, action: str) -> Response 
             status=status.HTTP_403_FORBIDDEN,
         )
     return None
+
+
+def _assign_next_host(session: Session) -> None:
+    replacement = (
+        SessionPlayer.objects.select_for_update()
+        .filter(session=session, role=SessionRole.PLAYER, left_at__isnull=True)
+        .order_by("joined_at")
+        .first()
+    )
+    if replacement:
+        replacement.is_host = True
+        replacement.save(update_fields=["is_host"])
+
+
+def _has_active_players(session: Session) -> bool:
+    return SessionPlayer.objects.filter(
+        session=session,
+        role=SessionRole.PLAYER,
+        left_at__isnull=True,
+    ).exists()
+
+
+def _abandon_session(session: Session) -> None:
+    if session.status == SessionStatus.FINISHED:
+        return
+    _clear_lobby_countdown_timer(session.id)
+    _clear_auto_advance_timer(session.id)
+    state = session.state or {}
+    state["phase"] = "abandoned"
+    session.status = SessionStatus.ABANDONED
+    session.ended_at = timezone.now()
+    session.state = state
+    session.save(update_fields=["status", "ended_at", "state"])
 
 
 def _playable_questions(session: Session) -> list[Question]:

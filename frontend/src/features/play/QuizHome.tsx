@@ -35,6 +35,7 @@ import {
   getSession,
   getSessionInvitePreview,
   joinSession,
+  leaveSession,
   listQuizzes,
   placeSessionWager,
   sendSessionChat,
@@ -669,6 +670,24 @@ export function QuizHome() {
     }
   }
 
+  async function handleLeaveSession() {
+    if (!liveSession || !localPlayerId) {
+      handleBackHome();
+      return;
+    }
+
+    setIsUpdatingSession(true);
+    setSessionError(null);
+    try {
+      await leaveSession(liveSession.id, localPlayerId);
+      handleBackHome();
+    } catch (err) {
+      setSessionError(err instanceof Error ? err.message : "Could not leave room");
+    } finally {
+      setIsUpdatingSession(false);
+    }
+  }
+
   async function handleStartSession() {
     if (!liveSession || !localPlayerId) {
       return;
@@ -822,6 +841,7 @@ export function QuizHome() {
         <LobbyRoom
           isUpdatingSession={isUpdatingSession}
           localPlayerId={localPlayerId}
+          onLeaveSession={handleLeaveSession}
           onReadyChange={handleReadyChange}
           onSendChat={handleSendChat}
           onStartSession={handleStartSession}
@@ -1500,6 +1520,7 @@ function Stat({ label, value }: { label: string; value: string | number }) {
 function LobbyRoom({
   isUpdatingSession,
   localPlayerId,
+  onLeaveSession,
   onReadyChange,
   onSendChat,
   onStartSession,
@@ -1509,6 +1530,7 @@ function LobbyRoom({
 }: {
   isUpdatingSession: boolean;
   localPlayerId: string | null;
+  onLeaveSession: () => void;
   onReadyChange: (isReady: boolean) => void;
   onSendChat: (message: string) => Promise<void>;
   onStartSession: () => void;
@@ -1522,9 +1544,11 @@ function LobbyRoom({
   const isLobby = session.status === "lobby";
   const isHost = Boolean(localPlayer?.is_host);
   const url = inviteUrl(session.invite_code);
+  const activeLobbyPlayers = session.players.filter(
+    (player) => player.role === "player" && player.left_at === null,
+  );
   const allReady =
-    session.players.length > 0 &&
-    session.players.filter((p) => p.role === "player").every((p) => p.is_ready);
+    activeLobbyPlayers.length > 0 && activeLobbyPlayers.every((player) => player.is_ready);
   const countdownRemaining = lobbyCountdownRemaining(session, nowMs);
   const countdownActive = countdownRemaining !== null;
 
@@ -1634,6 +1658,16 @@ function LobbyRoom({
                   {isUpdatingSession ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
                   {countdownRemaining !== null ? "Start now" : "Start the show"}
                 </Button>
+                <Button
+                  className="border-white/15 text-white hover:bg-white/10"
+                  disabled={isUpdatingSession || !localPlayerId}
+                  onClick={onLeaveSession}
+                  type="button"
+                  variant="ghost"
+                >
+                  <XCircle className="h-4 w-4" />
+                  Leave room
+                </Button>
               </div>
             </div>
             <RoomChatPanel
@@ -1653,7 +1687,7 @@ function LobbyRoom({
           Players
         </div>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {session.players.map((player, index) => {
+          {activeLobbyPlayers.map((player, index) => {
             const presence = playerPresence(session, player.id);
             return (
               <article
