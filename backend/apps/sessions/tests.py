@@ -665,6 +665,49 @@ class SessionApiTests(TestCase):
         self.assertEqual(friend_continue.json()["state"]["question_index"], 1)
         self.assertNotEqual(friend_continue.json()["state"]["question_id"], first_question_id)
 
+    def test_offline_player_does_not_block_continue_advance(self):
+        create_response = self.client.post(
+            "/api/sessions/",
+            data={"quiz_id": str(self.quiz.id), "display_name": "Ariel", "question_count": 2},
+            content_type="application/json",
+        )
+        create_payload = create_response.json()
+        session_id = create_payload["session"]["id"]
+        host_id = create_payload["player_id"]
+        join_response = self.client.post(
+            "/api/sessions/join/",
+            data={"session_id": session_id, "display_name": "Friend"},
+            content_type="application/json",
+        )
+        friend_id = join_response.json()["player_id"]
+        start_response = self.client.post(f"/api/sessions/{session_id}/start/")
+        first_question_id = start_response.json()["state"]["question_id"]
+        canonical_answer = start_response.json()["quiz"]["rounds"][0]["questions"][0]["canonical_answer"]
+
+        session = _session_queryset().get(pk=session_id)
+        state = session.state
+        state["presence"] = {
+            host_id: {"online": True, "connection_count": 1},
+            friend_id: {"online": False, "connection_count": 0},
+        }
+        session.state = state
+        session.save(update_fields=["state"])
+
+        self.client.post(
+            f"/api/sessions/{session_id}/players/{host_id}/answer/",
+            data={"submitted_text": canonical_answer},
+            content_type="application/json",
+        )
+
+        continue_response = self.client.post(
+            f"/api/sessions/{session_id}/players/{host_id}/continue/",
+            content_type="application/json",
+        )
+
+        self.assertEqual(continue_response.status_code, 200)
+        self.assertEqual(continue_response.json()["state"]["question_index"], 1)
+        self.assertNotEqual(continue_response.json()["state"]["question_id"], first_question_id)
+
     def test_continue_requires_submission_before_deadline(self):
         create_response = self.client.post(
             "/api/sessions/",

@@ -592,6 +592,9 @@ def _auto_advance_condition_met(session: Session, reason: str) -> bool:
     if reason == "all_wagered":
         question = _current_question(session)
         return bool(question and _all_active_players_wagered(session, question))
+    if reason == "all_next_ready":
+        question = _current_question(session)
+        return bool(question and _all_active_players_next_ready(session, question))
     if reason == "all_submitted":
         question = _current_question(session)
         return bool(question and _all_active_players_submitted(session, question))
@@ -641,7 +644,43 @@ def _active_player_ids(session: Session) -> list[str]:
             role=SessionRole.PLAYER,
             left_at__isnull=True,
         ).values_list("id", flat=True)
+        if _player_is_presence_active(session.state or {}, str(player_id))
     ]
+
+
+def _player_is_presence_active(state: dict, player_id: str) -> bool:
+    presence = state.get("presence")
+    if not isinstance(presence, dict):
+        return True
+    entry = presence.get(player_id)
+    if not isinstance(entry, dict):
+        return True
+    return entry.get("online") is not False
+
+
+def sync_session_after_presence_change(session_id) -> None:
+    try:
+        session = _session_queryset().get(pk=session_id)
+    except Session.DoesNotExist:
+        return
+    if session.status != SessionStatus.PLAYING:
+        return
+
+    question = _current_question(session)
+    if not question:
+        return
+
+    phase = (session.state or {}).get("phase")
+    if phase == "betting" and _all_active_players_wagered(session, question):
+        _schedule_auto_advance(session, reason="all_wagered", delay_s=0.6)
+    elif phase == "question" and _all_active_players_next_ready(session, question):
+        _schedule_auto_advance(session, reason="all_next_ready", delay_s=0)
+    elif phase == "question" and _all_active_players_submitted(session, question):
+        _schedule_auto_advance(
+            session,
+            reason="all_submitted",
+            delay_s=_all_submitted_advance_delay_s(),
+        )
 
 
 def _deadline_has_elapsed(session: Session) -> bool:

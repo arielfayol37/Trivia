@@ -364,6 +364,16 @@ function playerPresence(session: LiveSession, playerId: string) {
   };
 }
 
+function activeGamePlayers(session: LiveSession) {
+  return session.players.filter((player) => {
+    if (player.role !== "player" || player.left_at !== null) {
+      return false;
+    }
+    const presence = playerPresence(session, player.id);
+    return presence.online || !presence.known;
+  });
+}
+
 const ROUND_LABELS: Record<Quiz["rounds"][number]["type"], string> = {
   meta_strategy: "Meta-strategy",
   list_race: "List race",
@@ -1974,9 +1984,7 @@ function PlayingRoom({
     typeof submission.points_awarded === "number" ? submission.points_awarded : 0;
   const questionClosed = questionHasClosed(session, nowMs);
   const shouldRevealAnswers = hasSubmitted || questionClosed;
-  const activePlayers = session.players.filter(
-    (player) => player.role === "player" && player.left_at === null,
-  );
+  const activePlayers = activeGamePlayers(session);
   const questionNextReady = asRecord(asRecord(asRecord(session.state).next_ready)[question.id]);
   const localNextReady = Boolean(localPlayerId && questionNextReady[localPlayerId]);
   const nextReadyCount = activePlayers.filter((player) => questionNextReady[player.id]).length;

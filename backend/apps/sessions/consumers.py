@@ -10,6 +10,7 @@ from django.utils import timezone
 
 from apps.sessions.models import Session, SessionPlayer
 from apps.sessions.realtime import broadcast_session_snapshot, session_group_name, session_snapshot
+from apps.sessions.views import sync_session_after_presence_change
 
 
 class SessionConsumer(AsyncJsonWebsocketConsumer):
@@ -39,6 +40,7 @@ class SessionConsumer(AsyncJsonWebsocketConsumer):
         await self.accept()
         if self.player_id:
             await self._set_player_presence(self.session_id, self.player_id, online=True)
+            await database_sync_to_async(sync_session_after_presence_change)(self.session_id)
         await self.send_json(
             {
                 "type": "session.snapshot",
@@ -53,6 +55,7 @@ class SessionConsumer(AsyncJsonWebsocketConsumer):
             await self.channel_layer.group_discard(self.group_name, self.channel_name)
         if self.player_id:
             await self._set_player_presence(self.session_id, self.player_id, online=False)
+            await database_sync_to_async(sync_session_after_presence_change)(self.session_id)
             await broadcast_session_snapshot(self.session_id, "session.presence")
 
     async def receive_json(self, content, **_kwargs):

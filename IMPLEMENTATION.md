@@ -97,6 +97,9 @@ Implemented:
   - After a question reveal, every player can mark themselves ready for the next
     question; if all active players do, the backend advances immediately instead of
     waiting for the auto-advance grace period.
+  - Known-offline players no longer block all-submit, all-wagered, or everyone-ready
+    next-question advancement; players without socket presence are still counted so
+    REST-only/fresh sessions do not advance too eagerly.
   - Late answers after the question deadline are rejected.
 - Play UI has a first-pass game-show/stage visual direction:
   - Player-facing Play Hub.
@@ -412,6 +415,8 @@ for every question.
 - Frontend WebSocket listener with slower REST snapshot fallback.
 - Player-aware socket presence and refresh restore for the local player.
 - Backend-owned auto-advance on all-submit and timeout.
+- Presence-aware active-player gates, so known-offline players do not freeze wager,
+  all-submit, or ready-next progression.
 - REST-backed session state machine: lobby → playing → finished.
 - Sequential authored-question play; no default random 10-question sampling.
 - Text input and multiple-choice answer submission.
