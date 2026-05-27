@@ -50,6 +50,11 @@ import { RoundIntroSlate } from "./RoundIntroSlate";
 
 type DifficultyFilter = "all" | Quiz["difficulty"];
 type QuizCategoryId = "all" | Quiz["category"];
+type QuizRound = Quiz["rounds"][number];
+type PlayedQuestion = {
+  question: Question;
+  round: QuizRound;
+};
 
 type QuizCategory = {
   id: Exclude<QuizCategoryId, "all">;
@@ -261,6 +266,24 @@ function questionProgress(session: LiveSession) {
   const index = typeof state.question_index === "number" ? state.question_index : session.current_question_idx;
   const count = typeof state.question_count === "number" ? state.question_count : 0;
   return { index, count };
+}
+
+function playedQuestions(session: LiveSession): PlayedQuestion[] {
+  const byId = new Map<string, PlayedQuestion>();
+  for (const round of session.quiz.rounds) {
+    for (const question of round.questions) {
+      byId.set(question.id, { question, round });
+    }
+  }
+
+  const selectedIds = asRecord(session.state).selected_question_ids;
+  if (Array.isArray(selectedIds) && selectedIds.length) {
+    return selectedIds
+      .map((id) => (typeof id === "string" ? byId.get(id) : undefined))
+      .filter((entry): entry is PlayedQuestion => Boolean(entry));
+  }
+
+  return [...byId.values()];
 }
 
 function questionDeadlineMs(session: LiveSession) {
@@ -2777,8 +2800,16 @@ function FinishedRoom({
       ),
     [session],
   );
+  const reviewQuestions = useMemo(() => playedQuestions(session), [session]);
+  const [reviewIndex, setReviewIndex] = useState(0);
   const winner = rankedPlayers[0] ?? null;
   const hasFiredRef = useRef(false);
+
+  useEffect(() => {
+    if (reviewIndex >= reviewQuestions.length) {
+      setReviewIndex(0);
+    }
+  }, [reviewIndex, reviewQuestions.length]);
 
   useEffect(() => {
     if (hasFiredRef.current) {
@@ -2896,6 +2927,14 @@ function FinishedRoom({
           ))}
         </section>
       </div>
+
+      <PostGameReview
+        activeIndex={reviewIndex}
+        localPlayerId={localPlayerId}
+        onSelectQuestion={setReviewIndex}
+        questions={reviewQuestions}
+        session={session}
+      />
       <RoomChatPanel
         disabled={!localPlayerId}
         localPlayerId={localPlayerId}
@@ -2906,4 +2945,228 @@ function FinishedRoom({
       />
     </div>
   );
+}
+
+function PostGameReview({
+  activeIndex,
+  localPlayerId,
+  onSelectQuestion,
+  questions,
+  session,
+}: {
+  activeIndex: number;
+  localPlayerId: string | null;
+  onSelectQuestion: (index: number) => void;
+  questions: PlayedQuestion[];
+  session: LiveSession;
+}) {
+  if (!questions.length) {
+    return (
+      <section className="mt-7 rounded-2xl border border-white/10 bg-night p-5 text-white shadow-stage">
+        <div className="text-[10px] font-bold uppercase tracking-[0.45em] text-stagegold">
+          Review
+        </div>
+        <div className="mt-3 rounded-xl border border-white/10 bg-white/5 p-4 text-sm font-semibold text-white/65">
+          No per-question review is available for this round format yet.
+        </div>
+      </section>
+    );
+  }
+
+  const safeIndex = Math.min(activeIndex, questions.length - 1);
+  const active = questions[safeIndex];
+
+  return (
+    <section className="mt-7 rounded-2xl border border-white/10 bg-night p-4 text-white shadow-stage sm:p-5">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <div className="text-[10px] font-bold uppercase tracking-[0.45em] text-stagegold">
+            Review
+          </div>
+          <h2 className="mt-2 font-display text-3xl uppercase tracking-wide">
+            Answers and receipts
+          </h2>
+        </div>
+        <div className="rounded-full border border-white/15 bg-white/5 px-3 py-1.5 text-xs font-black uppercase tracking-[0.22em] text-white/65">
+          Q{safeIndex + 1} / {questions.length}
+        </div>
+      </div>
+
+      <div className="mt-4 flex gap-2 overflow-x-auto pb-2">
+        {questions.map(({ question }, index) => {
+          const correctCount = questionResultSummary(session, question).correct;
+          const isActive = index === safeIndex;
+          return (
+            <button
+              aria-current={isActive ? "true" : undefined}
+              className={cn(
+                "flex h-14 min-w-16 touch-manipulation flex-col items-center justify-center rounded-lg border px-3 text-xs font-black uppercase tracking-[0.12em] transition",
+                isActive
+                  ? "border-stagegold bg-stagegold text-midnight"
+                  : "border-white/15 bg-white/5 text-white hover:border-stagegold/70",
+              )}
+              key={question.id}
+              onClick={() => onSelectQuestion(index)}
+              type="button"
+            >
+              <span>Q{index + 1}</span>
+              <span className={isActive ? "text-midnight/60" : "text-white/45"}>
+                {correctCount}/{session.players.filter((player) => player.role === "player").length}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      <QuestionReviewDetail
+        entry={active}
+        localPlayerId={localPlayerId}
+        questionNumber={safeIndex + 1}
+        session={session}
+      />
+    </section>
+  );
+}
+
+function QuestionReviewDetail({
+  entry,
+  localPlayerId,
+  questionNumber,
+  session,
+}: {
+  entry: PlayedQuestion;
+  localPlayerId: string | null;
+  questionNumber: number;
+  session: LiveSession;
+}) {
+  const { question, round } = entry;
+  const acceptableAnswers = question.acceptable_answers.filter(
+    (answer) => answer && answer !== question.canonical_answer,
+  );
+  const responses = questionPlayerResponses(session, question);
+  const totalPlayers = responses.length;
+  const correctCount = responses.filter((response) => response.accepted).length;
+
+  return (
+    <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(300px,0.9fr)]">
+      <article className="rounded-xl bg-white p-4 text-midnight sm:p-5">
+        <div className="text-[10px] font-black uppercase tracking-[0.32em] text-midnight/45">
+          Round {round.order} · {roundLabel(round.type)} · Question {questionNumber}
+        </div>
+        <div className="mt-3">
+          <PromptBlocksRenderer blocks={question.prompt_blocks} variant="preview" />
+        </div>
+      </article>
+
+      <div className="grid gap-3">
+        <article className="rounded-xl border border-stagegold/35 bg-stagegold/15 p-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-[10px] font-black uppercase tracking-[0.32em] text-stagegold">
+                Correct answer
+              </div>
+              <div className="mt-2 text-lg font-black leading-snug text-white">
+                <InlineMathText text={question.canonical_answer || "Answer not configured"} />
+              </div>
+            </div>
+            <div className="shrink-0 rounded-full bg-stagegold px-3 py-1 text-xs font-black uppercase tracking-[0.18em] text-midnight">
+              {correctCount}/{totalPlayers}
+            </div>
+          </div>
+          {acceptableAnswers.length ? (
+            <div className="mt-2 text-xs font-semibold leading-5 text-white/65">
+              Also accepted: {acceptableAnswers.slice(0, 6).join(", ")}
+            </div>
+          ) : null}
+        </article>
+
+        <div className="grid gap-2">
+          {responses.map((response) => (
+            <article
+              className={cn(
+                "rounded-xl border px-3 py-3",
+                response.submitted
+                  ? response.accepted
+                    ? "border-aqua/45 bg-aqua/15"
+                    : "border-coral/45 bg-coral/15"
+                  : "border-white/10 bg-white/5",
+                response.player.id === localPlayerId ? "ring-2 ring-stagegold/45" : "",
+              )}
+              key={response.player.id}
+            >
+              <div className="flex items-start gap-3">
+                <div
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md font-display text-lg text-midnight"
+                  style={{
+                    backgroundColor: playerColor(session.players.findIndex((player) => player.id === response.player.id)),
+                  }}
+                >
+                  {response.player.display_name.slice(0, 1).toUpperCase()}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="truncate text-sm font-black text-white">
+                      {response.player.display_name}
+                    </div>
+                    <div
+                      className={cn(
+                        "shrink-0 rounded-full px-2 py-1 text-[10px] font-black uppercase tracking-[0.15em]",
+                        response.submitted
+                          ? response.accepted
+                            ? "bg-aqua text-midnight"
+                            : "bg-coral text-white"
+                          : "bg-white/10 text-white/55",
+                      )}
+                    >
+                      {response.submitted ? (response.accepted ? "Right" : "Miss") : "No answer"}
+                    </div>
+                  </div>
+                  <div className="mt-1 text-sm font-semibold leading-5 text-white/85">
+                    <InlineMathText text={response.submittedText} />
+                  </div>
+                  {response.submitted ? (
+                    <div className="mt-1 text-[10px] font-black uppercase tracking-[0.22em] text-white/45">
+                      +{response.pointsAwarded} {response.pointsAwarded === 1 ? "point" : "points"}
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            </article>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function questionResultSummary(session: LiveSession, question: Question) {
+  const responses = questionPlayerResponses(session, question);
+  return {
+    correct: responses.filter((response) => response.accepted).length,
+    total: responses.length,
+  };
+}
+
+function questionPlayerResponses(session: LiveSession, question: Question) {
+  return session.players
+    .filter((player) => player.role === "player")
+    .map((player) => {
+      const response = submissionFor(session, question.id, player.id);
+      const submitted = response.submitted === true;
+      const accepted = submitted && response.accepted === true;
+      const pointsAwarded = numberFrom(response.points_awarded, 0);
+      const submittedText =
+        typeof response.submitted_text === "string" && response.submitted_text.trim()
+          ? response.submitted_text
+          : submitted
+            ? "Submitted"
+            : "No answer";
+      return {
+        accepted,
+        player,
+        pointsAwarded,
+        submitted,
+        submittedText,
+      };
+    });
 }

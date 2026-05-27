@@ -106,6 +106,8 @@ Implemented:
     unread count instead of taking permanent screen space.
   - Correct answer and player submissions now reveal in a fixed compact dock above the
     score chyron, reducing scroll on phone-sized screens.
+  - Finished games include a question review rail with the prompt, correct answer,
+    accepted alternatives, each player's submission, and awarded points.
   - Mobile form controls use 16px text to avoid iOS/Safari zooming into focused answer
     and chat fields.
   - New questions reset the window scroll position to the top.
@@ -138,7 +140,8 @@ Still not done:
   and mobile-sized controls.
 - LLM judge fallback currently applies to standard typed open-answer questions, not
   list-race item matching.
-- Post-game review/replay beyond the current final scoreboard and action buttons.
+- Deeper post-game replay tooling beyond the current final scoreboard, question review,
+  same-topic action, and room chat.
 - Anti-cheat instrumentation/enforcement.
 - Accounts/auth polish.
 - Public leaderboard and play history.
@@ -155,8 +158,8 @@ Immediate next priorities:
 3. **Playable widget expansion**: finish live behavior for `list_input` and `hotspot`;
    polish keyboard navigation for `ordering`, `matching`, and `image_choice`;
    keep `list_race` as a first-class round type rather than a special case.
-4. **Post-game review**: final scoreboard plus per-question answer review. This matters
-   because friends will argue about answers.
+4. **Post-game replay polish**: add richer filtering/jump controls and optional exports
+   for long quizzes. This matters because friends will argue about answers.
 5. **Deployment validation**: after the play engine is WebSocket-backed, validate Docker,
    Redis/Channels, Caddy, and Cloudflare Tunnel on the desktop host.
 
