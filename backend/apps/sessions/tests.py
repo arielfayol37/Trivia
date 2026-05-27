@@ -618,6 +618,71 @@ class SessionApiTests(TestCase):
         self.assertEqual(payload["state"]["question_index"], 1)
         self.assertNotEqual(payload["state"]["question_id"], first_question_id)
 
+    def test_players_can_all_continue_to_advance_after_answer_reveal(self):
+        create_response = self.client.post(
+            "/api/sessions/",
+            data={"quiz_id": str(self.quiz.id), "display_name": "Ariel", "question_count": 2},
+            content_type="application/json",
+        )
+        create_payload = create_response.json()
+        session_id = create_payload["session"]["id"]
+        host_id = create_payload["player_id"]
+        join_response = self.client.post(
+            "/api/sessions/join/",
+            data={"session_id": session_id, "display_name": "Friend"},
+            content_type="application/json",
+        )
+        friend_id = join_response.json()["player_id"]
+        start_response = self.client.post(f"/api/sessions/{session_id}/start/")
+        first_question_id = start_response.json()["state"]["question_id"]
+        canonical_answer = start_response.json()["quiz"]["rounds"][0]["questions"][0]["canonical_answer"]
+
+        self.client.post(
+            f"/api/sessions/{session_id}/players/{host_id}/answer/",
+            data={"submitted_text": canonical_answer},
+            content_type="application/json",
+        )
+        self.client.post(
+            f"/api/sessions/{session_id}/players/{friend_id}/answer/",
+            data={"submitted_text": canonical_answer},
+            content_type="application/json",
+        )
+
+        host_continue = self.client.post(
+            f"/api/sessions/{session_id}/players/{host_id}/continue/",
+            content_type="application/json",
+        )
+        self.assertEqual(host_continue.status_code, 200)
+        self.assertEqual(host_continue.json()["state"]["question_id"], first_question_id)
+        self.assertIn(host_id, host_continue.json()["state"]["next_ready"][first_question_id])
+
+        friend_continue = self.client.post(
+            f"/api/sessions/{session_id}/players/{friend_id}/continue/",
+            content_type="application/json",
+        )
+
+        self.assertEqual(friend_continue.status_code, 200)
+        self.assertEqual(friend_continue.json()["state"]["question_index"], 1)
+        self.assertNotEqual(friend_continue.json()["state"]["question_id"], first_question_id)
+
+    def test_continue_requires_submission_before_deadline(self):
+        create_response = self.client.post(
+            "/api/sessions/",
+            data={"quiz_id": str(self.quiz.id), "display_name": "Ariel", "question_count": 1},
+            content_type="application/json",
+        )
+        session_id = create_response.json()["session"]["id"]
+        player_id = create_response.json()["player_id"]
+        self.client.post(f"/api/sessions/{session_id}/start/")
+
+        continue_response = self.client.post(
+            f"/api/sessions/{session_id}/players/{player_id}/continue/",
+            content_type="application/json",
+        )
+
+        self.assertEqual(continue_response.status_code, 400)
+        self.assertIn("Submit an answer", continue_response.json()["detail"])
+
     def test_server_finishes_question_on_timeout(self):
         create_response = self.client.post(
             "/api/sessions/",

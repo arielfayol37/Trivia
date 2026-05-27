@@ -28,6 +28,7 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   advanceSessionQuestion,
+  continueSessionQuestion,
   createSession,
   getSessionSocketUrl,
   getHealth,
@@ -665,6 +666,22 @@ export function QuizHome() {
     }
   }
 
+  async function handleContinueQuestion() {
+    if (!liveSession || !localPlayerId) {
+      return;
+    }
+
+    setIsUpdatingSession(true);
+    setSessionError(null);
+    try {
+      setLiveSession(await continueSessionQuestion(liveSession.id, localPlayerId));
+    } catch (err) {
+      setSessionError(err instanceof Error ? err.message : "Could not mark ready for next");
+    } finally {
+      setIsUpdatingSession(false);
+    }
+  }
+
   function handleBackHome() {
     clearLocalSession();
     setLiveSession(null);
@@ -701,6 +718,7 @@ export function QuizHome() {
           onFindSimilar={handleFindSimilar}
           onPlayAgain={() => handleCreateLobby(liveSession.quiz)}
           onPlaceWager={handlePlaceWager}
+          onContinueQuestion={handleContinueQuestion}
           onSendChat={handleSendChat}
           onSubmitAnswer={handleSubmitAnswer}
           session={liveSession}
@@ -1393,6 +1411,7 @@ function GameRoom({
   localPlayerId,
   onAdvanceQuestion,
   onBackHome,
+  onContinueQuestion,
   onFindSimilar,
   onPlayAgain,
   onPlaceWager,
@@ -1405,6 +1424,7 @@ function GameRoom({
   localPlayerId: string | null;
   onAdvanceQuestion: () => void;
   onBackHome: () => void;
+  onContinueQuestion: () => void;
   onFindSimilar: (quiz: Quiz) => void;
   onPlayAgain: () => void;
   onPlaceWager: (points: number) => void;
@@ -1462,6 +1482,7 @@ function GameRoom({
       isUpdatingSession={isUpdatingSession}
       localPlayerId={localPlayerId}
       onAdvanceQuestion={onAdvanceQuestion}
+      onContinueQuestion={onContinueQuestion}
       onSendChat={onSendChat}
       onSubmitAnswer={onSubmitAnswer}
       session={session}
@@ -1869,6 +1890,7 @@ function PlayingRoom({
   isUpdatingSession,
   localPlayerId,
   onAdvanceQuestion,
+  onContinueQuestion,
   onSendChat,
   onSubmitAnswer,
   session,
@@ -1877,6 +1899,7 @@ function PlayingRoom({
   isUpdatingSession: boolean;
   localPlayerId: string | null;
   onAdvanceQuestion: () => void;
+  onContinueQuestion: () => void;
   onSendChat: (message: string) => Promise<void>;
   onSubmitAnswer: (input: {
     submitted_text?: string;
@@ -1951,6 +1974,12 @@ function PlayingRoom({
     typeof submission.points_awarded === "number" ? submission.points_awarded : 0;
   const questionClosed = questionHasClosed(session, nowMs);
   const shouldRevealAnswers = hasSubmitted || questionClosed;
+  const activePlayers = session.players.filter(
+    (player) => player.role === "player" && player.left_at === null,
+  );
+  const questionNextReady = asRecord(asRecord(asRecord(session.state).next_ready)[question.id]);
+  const localNextReady = Boolean(localPlayerId && questionNextReady[localPlayerId]);
+  const nextReadyCount = activePlayers.filter((player) => questionNextReady[player.id]).length;
 
   return (
     <>
@@ -2023,6 +2052,30 @@ function PlayingRoom({
                 ) : null}
               </div>
 
+              {shouldRevealAnswers ? (
+                <div className="rounded-xl border border-stagegold/25 bg-stagegold/10 p-4">
+                  <Button
+                    className="w-full uppercase tracking-wider"
+                    disabled={isUpdatingSession || !localPlayerId || localNextReady}
+                    onClick={onContinueQuestion}
+                    type="button"
+                    variant="stage"
+                  >
+                    {isUpdatingSession ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : localNextReady ? (
+                      <CheckCircle2 className="h-4 w-4" />
+                    ) : (
+                      <Play className="h-4 w-4" />
+                    )}
+                    {localNextReady ? "Ready for next" : "Next"}
+                  </Button>
+                  <div className="mt-2 text-center text-xs font-bold uppercase tracking-[0.22em] text-white/60">
+                    {nextReadyCount}/{activePlayers.length} ready
+                  </div>
+                </div>
+              ) : null}
+
               <Button
                 className="w-full uppercase tracking-wider"
                 disabled={!isHost || isUpdatingSession}
@@ -2035,10 +2088,14 @@ function PlayingRoom({
                 ) : (
                   <Play className="h-4 w-4" />
                 )}
-                Skip / next
+                {shouldRevealAnswers ? "Force next" : "Skip / next"}
               </Button>
               {!isHost ? (
-                <div className="text-xs text-white/55">Questions advance automatically.</div>
+                <div className="text-xs text-white/55">
+                  {shouldRevealAnswers
+                    ? "Everyone can tap Next to move faster."
+                    : "Questions advance automatically."}
+                </div>
               ) : null}
             </aside>
           </div>

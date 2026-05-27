@@ -94,6 +94,9 @@ Implemented:
   - Frontend listens over WebSocket and keeps a slower REST snapshot poll as a fallback.
   - Backend schedules automatic progression on question timeout and when all active
     players have submitted. The host browser no longer owns auto-advance.
+  - After a question reveal, every player can mark themselves ready for the next
+    question; if all active players do, the backend advances immediately instead of
+    waiting for the auto-advance grace period.
   - Late answers after the question deadline are rejected.
 - Play UI has a first-pass game-show/stage visual direction:
   - Player-facing Play Hub.

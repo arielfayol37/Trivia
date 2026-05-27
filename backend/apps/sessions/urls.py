@@ -3,6 +3,7 @@ from django.urls import path
 from apps.sessions.views import (
     SessionCreateView,
     SessionChatView,
+    SessionContinueView,
     SessionDetailView,
     SessionJoinView,
     SessionNextQuestionView,
@@ -37,5 +38,10 @@ urlpatterns = [
         "<uuid:session_id>/players/<uuid:player_id>/chat/",
         SessionChatView.as_view(),
         name="session-chat",
+    ),
+    path(
+        "<uuid:session_id>/players/<uuid:player_id>/continue/",
+        SessionContinueView.as_view(),
+        name="session-player-continue",
     ),
 ]

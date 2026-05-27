@@ -184,6 +184,15 @@ export function sendSessionChat(sessionId: string, playerId: string, message: st
   );
 }
 
+export function continueSessionQuestion(sessionId: string, playerId: string) {
+  return request<LiveSession>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/players/${encodeURIComponent(playerId)}/continue/`,
+    {
+      method: "POST",
+    },
+  );
+}
+
 export function advanceSessionQuestion(sessionId: string) {
   return request<LiveSession>(`/api/sessions/${encodeURIComponent(sessionId)}/next/`, {
     method: "POST",

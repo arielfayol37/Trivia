@@ -324,6 +324,47 @@ class SessionChatView(APIView):
         return Response(SessionSerializer(refreshed).data)
 
 
+class SessionContinueView(APIView):
+    def post(self, _request, session_id, player_id):
+        with transaction.atomic():
+            session = get_object_or_404(Session.objects.select_for_update(), pk=session_id)
+            if session.status != SessionStatus.PLAYING:
+                return Response(
+                    {"detail": "Only playing sessions can continue"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            player = get_object_or_404(SessionPlayer, pk=player_id, session=session)
+            question = _current_question(session)
+            if not question or (session.state or {}).get("phase") != "question":
+                return Response(
+                    {"detail": "No active question to continue"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if not _player_submitted(session, question, player) and not _deadline_has_elapsed(session):
+                return Response(
+                    {"detail": "Submit an answer before continuing"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            state = session.state or {}
+            question_id = str(question.id)
+            next_ready = state.setdefault("next_ready", {})
+            question_ready = next_ready.setdefault(question_id, {})
+            question_ready[str(player.id)] = timezone.now().isoformat()
+            session.state = state
+            session.save(update_fields=["state"])
+
+            event = "session.player_continue"
+            if _all_active_players_next_ready(session, question):
+                event = _advance_session(session)
+
+        refreshed = _session_queryset().get(pk=session_id)
+        broadcast_session_snapshot_sync(session_id, event)
+        _schedule_auto_advance(refreshed)
+        return Response(SessionSerializer(refreshed).data)
+
+
 class SessionNextQuestionView(APIView):
     def post(self, _request, session_id):
         session = get_object_or_404(_session_queryset(), pk=session_id)
@@ -565,6 +606,23 @@ def _all_active_players_submitted(session: Session, question: Question) -> bool:
     submissions = (session.state or {}).get("submissions") or {}
     question_submissions = submissions.get(str(question.id)) or {}
     return all((question_submissions.get(player_id) or {}).get("submitted") is True for player_id in player_ids)
+
+
+def _player_submitted(session: Session, question: Question, player: SessionPlayer) -> bool:
+    submissions = (session.state or {}).get("submissions") or {}
+    question_submissions = submissions.get(str(question.id)) or {}
+    player_submission = question_submissions.get(str(player.id)) or {}
+    return player_submission.get("submitted") is True
+
+
+def _all_active_players_next_ready(session: Session, question: Question) -> bool:
+    player_ids = _active_player_ids(session)
+    if not player_ids:
+        return False
+
+    next_ready = (session.state or {}).get("next_ready") or {}
+    question_ready = next_ready.get(str(question.id)) or {}
+    return all(question_ready.get(player_id) for player_id in player_ids)
 
 
 def _all_active_players_wagered(session: Session, question: Question) -> bool:
