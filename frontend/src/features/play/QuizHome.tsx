@@ -1,11 +1,14 @@
 import confetti from "canvas-confetti";
 import { AnimatePresence, motion } from "framer-motion";
 import {
+  ArrowDown,
   ArrowLeft,
+  ArrowUp,
   CheckCircle2,
   Clipboard,
   Crown,
   Home,
+  ImageIcon,
   Link,
   Loader2,
   LogIn,
@@ -2173,10 +2176,16 @@ function AnswerEntry({
   question: Question;
 }) {
   const [answer, setAnswer] = useState("");
+  const [orderedItems, setOrderedItems] = useState<string[]>(
+    question.answer_widget.type === "ordering" ? question.answer_widget.items : [],
+  );
+  const [matches, setMatches] = useState<Record<string, string>>({});
   const [justLockedIn, setJustLockedIn] = useState(false);
 
   useEffect(() => {
     setAnswer("");
+    setOrderedItems(question.answer_widget.type === "ordering" ? question.answer_widget.items : []);
+    setMatches({});
     setJustLockedIn(false);
   }, [question.id]);
 
@@ -2210,6 +2219,193 @@ function AnswerEntry({
             <InlineMathText text={option.label} />
           </motion.button>
         ))}
+      </div>
+    );
+  }
+
+  if (question.answer_widget.type === "image_choice") {
+    return (
+      <div className="grid gap-3">
+        <div className="grid gap-2 sm:grid-cols-2">
+          {question.answer_widget.images.map((image, index) => {
+            const label = image.label ?? image.alt ?? `Choice ${index + 1}`;
+            return (
+              <motion.button
+                className="overflow-hidden rounded-lg border border-white/15 bg-white text-left text-midnight shadow-panel transition hover:border-stagegold hover:bg-pale disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={disabled}
+                key={`${image.url ?? label}-${index}`}
+                onClick={() => {
+                  flashLockIn();
+                  onSubmit({
+                    submitted_text: label,
+                    submitted_payload: {
+                      choice_index: index,
+                      label,
+                      alt: image.alt ?? "",
+                      url: image.url ?? "",
+                    },
+                  });
+                }}
+                type="button"
+                whileTap={{ scale: 0.98 }}
+              >
+                <div className="flex aspect-video items-center justify-center bg-paper">
+                  {image.url ? (
+                    <img
+                      alt={image.alt ?? label}
+                      className="h-full w-full object-contain"
+                      src={image.url}
+                    />
+                  ) : (
+                    <ImageIcon className="h-8 w-8 text-midnight/35" />
+                  )}
+                </div>
+                <div className="px-3 py-2 text-sm font-bold">
+                  <InlineMathText text={label} />
+                </div>
+              </motion.button>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  if (question.answer_widget.type === "ordering") {
+    function moveItem(index: number, direction: -1 | 1) {
+      const nextIndex = index + direction;
+      if (nextIndex < 0 || nextIndex >= orderedItems.length) {
+        return;
+      }
+      setOrderedItems((current) => {
+        const next = [...current];
+        [next[index], next[nextIndex]] = [next[nextIndex], next[index]];
+        return next;
+      });
+    }
+
+    return (
+      <div className="grid gap-3">
+        <ol className="space-y-2">
+          {orderedItems.map((item, index) => (
+            <li
+              className="flex items-center gap-2 rounded-lg border border-white/15 bg-white px-3 py-2 text-midnight"
+              key={`${item}-${index}`}
+            >
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-midnight font-display text-sm text-white">
+                {index + 1}
+              </span>
+              <span className="min-w-0 flex-1 text-sm font-semibold">
+                <InlineMathText text={item} />
+              </span>
+              <button
+                aria-label={`Move ${item} up`}
+                className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-softline bg-paper text-midnight disabled:opacity-35"
+                disabled={disabled || index === 0}
+                onClick={() => moveItem(index, -1)}
+                title="Move up"
+                type="button"
+              >
+                <ArrowUp className="h-4 w-4" />
+              </button>
+              <button
+                aria-label={`Move ${item} down`}
+                className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-softline bg-paper text-midnight disabled:opacity-35"
+                disabled={disabled || index === orderedItems.length - 1}
+                onClick={() => moveItem(index, 1)}
+                title="Move down"
+                type="button"
+              >
+                <ArrowDown className="h-4 w-4" />
+              </button>
+            </li>
+          ))}
+        </ol>
+        <Button
+          className="uppercase tracking-wider"
+          disabled={disabled || orderedItems.length === 0}
+          onClick={() => {
+            flashLockIn();
+            onSubmit({
+              submitted_text: orderedItems.join(" > "),
+              submitted_payload: { order: orderedItems },
+            });
+          }}
+          type="button"
+          variant="stage"
+        >
+          {hasSubmitted ? <CheckCircle2 className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />}
+          {hasSubmitted ? "Locked" : "Lock order"}
+        </Button>
+      </div>
+    );
+  }
+
+  if (question.answer_widget.type === "matching") {
+    const leftItems = question.answer_widget.left;
+    const rightItems = question.answer_widget.right;
+    const allMatched = leftItems.length > 0 && leftItems.every((item) => matches[item]);
+
+    return (
+      <div className="grid gap-3">
+        <div className="space-y-2">
+          {leftItems.map((leftItem) => {
+            const selectedElsewhere = new Set(
+              Object.entries(matches)
+                .filter(([item]) => item !== leftItem)
+                .map(([, value]) => value)
+                .filter(Boolean),
+            );
+            return (
+              <label
+                className="grid gap-2 rounded-lg border border-white/15 bg-white px-3 py-3 text-midnight"
+                key={leftItem}
+              >
+                <span className="text-sm font-black">
+                  <InlineMathText text={leftItem} />
+                </span>
+                <select
+                  className="h-11 rounded-md border border-softline bg-paper px-3 text-sm font-semibold outline-none focus:border-stagegold focus:ring-2 focus:ring-stagegold/30"
+                  disabled={disabled}
+                  onChange={(event) =>
+                    setMatches((current) => ({
+                      ...current,
+                      [leftItem]: event.target.value,
+                    }))
+                  }
+                  value={matches[leftItem] ?? ""}
+                >
+                  <option value="">Choose a match</option>
+                  {rightItems.map((rightItem) => (
+                    <option
+                      disabled={selectedElsewhere.has(rightItem)}
+                      key={rightItem}
+                      value={rightItem}
+                    >
+                      {rightItem}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            );
+          })}
+        </div>
+        <Button
+          className="uppercase tracking-wider"
+          disabled={disabled || !allMatched}
+          onClick={() => {
+            flashLockIn();
+            onSubmit({
+              submitted_text: leftItems.map((item) => `${item} -> ${matches[item]}`).join("; "),
+              submitted_payload: { matches },
+            });
+          }}
+          type="button"
+          variant="stage"
+        >
+          {hasSubmitted ? <CheckCircle2 className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />}
+          {hasSubmitted ? "Locked" : "Lock matches"}
+        </Button>
       </div>
     );
   }

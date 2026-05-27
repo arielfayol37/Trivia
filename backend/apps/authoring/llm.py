@@ -476,7 +476,7 @@ def _user_prompt(prompt: str, source_text: str) -> dict:
             "Use prompt_blocks and answer_widget on every question.",
             "Treat prompt blocks as composable. A quiz may contain multiple round types, and a single sync_open round may mix text-only, image, math, table, and source-excerpt questions.",
             "Support non-text play when requested: image prompts, table prompts, math blocks, source excerpts, list_race rounds, image_choice, ordering, matching, and hotspot widgets.",
-            "Prefer currently playable answer flows unless the user explicitly requests an experimental format: text_input, multiple_choice, image prompt plus text_input, and list_race.",
+            "Prefer currently playable answer flows unless the user explicitly requests an experimental format: text_input, multiple_choice, image prompt plus text_input, list_race, image_choice, ordering, and matching.",
             "For image-identification questions, create sync_open questions with image prompt blocks and the requested answer widget. Do not use list_race unless the user asks for a name-all/list-race format.",
             "When source_text contains HTML, rows, or snippets with country names and flag image URLs, extract country-image pairs and preserve those image URLs exactly in prompt_blocks[].url.",
             "For flag/image identification questions, do not reveal the answer in visible prompt text or captions. Use alt text for accessibility only.",

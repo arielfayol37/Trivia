@@ -4,7 +4,7 @@ from unittest.mock import patch
 from asgiref.sync import async_to_sync
 from channels.db import database_sync_to_async
 from channels.testing import WebsocketCommunicator
-from django.test import Client, TestCase, TransactionTestCase
+from django.test import Client, TestCase, TransactionTestCase, override_settings
 from django.utils import timezone
 
 from apps.authoring.ops import AuthoringContext, create_quiz_from_document
@@ -20,6 +20,7 @@ from apps.quizzes.models import QuizStatus
 from trivia.asgi import application
 
 
+@override_settings(SESSION_BACKGROUND_TIMERS_ENABLED=False)
 class SessionApiTests(TestCase):
     def setUp(self):
         self.quiz = create_quiz_from_document(sample_quiz_document("quantum mechanics"), AuthoringContext())
@@ -383,6 +384,199 @@ class SessionApiTests(TestCase):
         submission = payload["state"]["submissions"][question_id][player_id]
         self.assertTrue(submission["accepted"])
         self.assertEqual(submission["judge_mode_used"], "llm")
+        self.assertEqual(payload["state"]["scores"][player_id], 10.0)
+
+    def test_image_choice_question_is_playable(self):
+        quiz = create_quiz_from_document(
+            {
+                "title": "Flag Choice",
+                "category": "geography",
+                "topic": "flags",
+                "rounds": [
+                    {
+                        "type": "sync_open",
+                        "config": {"points_per_question": 10},
+                        "questions": [
+                            {
+                                "prompt_blocks": [{"type": "text", "text": "Choose Cameroon."}],
+                                "answer_widget": {
+                                    "type": "image_choice",
+                                    "images": [
+                                        {
+                                            "url": "https://example.com/cm.png",
+                                            "alt": "Cameroon",
+                                            "label": "Cameroon",
+                                        },
+                                        {
+                                            "url": "https://example.com/jp.png",
+                                            "alt": "Japan",
+                                            "label": "Japan",
+                                        },
+                                    ],
+                                },
+                                "canonical_answer": "Cameroon",
+                                "acceptable_answers": ["Cameroon"],
+                                "judge_mode": "fuzzy",
+                            }
+                        ],
+                    }
+                ],
+            },
+            AuthoringContext(),
+        )
+        quiz.status = QuizStatus.READY
+        quiz.save(update_fields=["status"])
+        create_response = self.client.post(
+            "/api/sessions/",
+            data={"quiz_id": str(quiz.id), "display_name": "Ariel"},
+            content_type="application/json",
+        )
+        session_id = create_response.json()["session"]["id"]
+        player_id = create_response.json()["player_id"]
+        start_response = self.client.post(f"/api/sessions/{session_id}/start/")
+        self.assertEqual(start_response.json()["state"]["phase"], "question")
+
+        submit_response = self.client.post(
+            f"/api/sessions/{session_id}/players/{player_id}/answer/",
+            data={
+                "submitted_text": "Cameroon",
+                "submitted_payload": {"choice_index": 0, "label": "Cameroon"},
+            },
+            content_type="application/json",
+        )
+
+        self.assertEqual(submit_response.status_code, 200)
+        payload = submit_response.json()
+        question_id = payload["state"]["question_id"]
+        self.assertTrue(payload["state"]["submissions"][question_id][player_id]["accepted"])
+        self.assertEqual(payload["state"]["scores"][player_id], 10.0)
+
+    def test_ordering_question_is_playable(self):
+        quiz = create_quiz_from_document(
+            {
+                "title": "Ordering Quiz",
+                "category": "geography",
+                "topic": "population",
+                "rounds": [
+                    {
+                        "type": "sync_open",
+                        "config": {"points_per_question": 10},
+                        "questions": [
+                            {
+                                "prompt_blocks": [
+                                    {
+                                        "type": "text",
+                                        "text": "Order largest to smallest population.",
+                                    }
+                                ],
+                                "answer_widget": {
+                                    "type": "ordering",
+                                    "items": ["Gabon", "Cameroon", "Chad"],
+                                },
+                                "canonical_answer": "Cameroon > Chad > Gabon",
+                                "acceptable_answers": ["Cameroon > Chad > Gabon"],
+                                "judge_mode": "fuzzy",
+                                "metadata": {
+                                    "correct_payload": ["Cameroon", "Chad", "Gabon"]
+                                },
+                            }
+                        ],
+                    }
+                ],
+            },
+            AuthoringContext(),
+        )
+        quiz.status = QuizStatus.READY
+        quiz.save(update_fields=["status"])
+        create_response = self.client.post(
+            "/api/sessions/",
+            data={"quiz_id": str(quiz.id), "display_name": "Ariel"},
+            content_type="application/json",
+        )
+        session_id = create_response.json()["session"]["id"]
+        player_id = create_response.json()["player_id"]
+        self.client.post(f"/api/sessions/{session_id}/start/")
+
+        submit_response = self.client.post(
+            f"/api/sessions/{session_id}/players/{player_id}/answer/",
+            data={
+                "submitted_payload": {
+                    "order": ["Cameroon", "Chad", "Gabon"],
+                }
+            },
+            content_type="application/json",
+        )
+
+        self.assertEqual(submit_response.status_code, 200)
+        payload = submit_response.json()
+        question_id = payload["state"]["question_id"]
+        self.assertTrue(payload["state"]["submissions"][question_id][player_id]["accepted"])
+        self.assertEqual(payload["state"]["scores"][player_id], 10.0)
+
+    def test_matching_question_is_playable(self):
+        quiz = create_quiz_from_document(
+            {
+                "title": "Matching Quiz",
+                "category": "geography",
+                "topic": "capitals",
+                "rounds": [
+                    {
+                        "type": "sync_open",
+                        "config": {"points_per_question": 10},
+                        "questions": [
+                            {
+                                "prompt_blocks": [
+                                    {"type": "text", "text": "Match countries to capitals."}
+                                ],
+                                "answer_widget": {
+                                    "type": "matching",
+                                    "left": ["Cameroon", "Japan"],
+                                    "right": ["Tokyo", "Yaounde"],
+                                },
+                                "canonical_answer": "Cameroon-Yaounde; Japan-Tokyo",
+                                "acceptable_answers": ["Cameroon-Yaounde; Japan-Tokyo"],
+                                "judge_mode": "fuzzy",
+                                "metadata": {
+                                    "correct_payload": {
+                                        "Cameroon": "Yaounde",
+                                        "Japan": "Tokyo",
+                                    }
+                                },
+                            }
+                        ],
+                    }
+                ],
+            },
+            AuthoringContext(),
+        )
+        quiz.status = QuizStatus.READY
+        quiz.save(update_fields=["status"])
+        create_response = self.client.post(
+            "/api/sessions/",
+            data={"quiz_id": str(quiz.id), "display_name": "Ariel"},
+            content_type="application/json",
+        )
+        session_id = create_response.json()["session"]["id"]
+        player_id = create_response.json()["player_id"]
+        self.client.post(f"/api/sessions/{session_id}/start/")
+
+        submit_response = self.client.post(
+            f"/api/sessions/{session_id}/players/{player_id}/answer/",
+            data={
+                "submitted_payload": {
+                    "matches": {
+                        "Cameroon": "Yaounde",
+                        "Japan": "Tokyo",
+                    }
+                }
+            },
+            content_type="application/json",
+        )
+
+        self.assertEqual(submit_response.status_code, 200)
+        payload = submit_response.json()
+        question_id = payload["state"]["question_id"]
+        self.assertTrue(payload["state"]["submissions"][question_id][player_id]["accepted"])
         self.assertEqual(payload["state"]["scores"][player_id], 10.0)
 
     def test_server_auto_advances_when_all_players_submit(self):

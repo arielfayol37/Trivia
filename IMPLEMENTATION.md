@@ -132,9 +132,9 @@ Still not done:
 - Robust disconnect/reconnect, host migration, and late-join spectator mode. Current
   presence is socket-count based and current player-response reveal is UI-gated, not
   security-redacted per player.
-- Full live support for all answer widgets and round types (`list_input`, `ordering`,
-  `matching`, `image_choice`, `hotspot`, richer `meta_strategy` variants, full
-  `buzz_in`).
+- Full live support for all answer widgets and round types (`list_input`, `hotspot`,
+  richer `meta_strategy` variants, full `buzz_in`). `image_choice`, `ordering`, and
+  `matching` now have basic live renderers and exact payload scoring.
 - LLM judge fallback currently applies to standard typed open-answer questions, not
   list-race item matching.
 - Post-game review/replay beyond the current final scoreboard and action buttons.
@@ -151,9 +151,9 @@ Immediate next priorities:
    same lobby, and tighten any mobile layout or socket issues.
 2. **Play mechanics polish**: improve locked
    answer states, animate score changes, and make host/non-host controls unambiguous.
-3. **Playable widget expansion**: finish live behavior for `list_input`, `ordering`,
-   `matching`, `image_choice`, and `hotspot`; keep `list_race` as a first-class round
-   type rather than a special case.
+3. **Playable widget expansion**: finish live behavior for `list_input` and `hotspot`;
+   polish keyboard/mobile interactions for `ordering`, `matching`, and `image_choice`;
+   keep `list_race` as a first-class round type rather than a special case.
 4. **Post-game review**: final scoreboard plus per-question answer review. This matters
    because friends will argue about answers.
 5. **Deployment validation**: after the play engine is WebSocket-backed, validate Docker,
@@ -497,8 +497,8 @@ prompt-block and answer-widget rendering layer introduced in M1.
   placeholders.
 - Preview renderers exist for text input, multiple choice, ordering, matching,
   image choice, hotspot, and list-race data.
-- Live runner supports text input and multiple choice through the standard submission
-  path.
+- Live runner supports text input, multiple choice, image choice, ordering, and matching
+  through the standard submission path.
 - A minimal live list-race runner can start, accept fuzzy-matched items, and score them.
 
 **Tasks**:
@@ -506,8 +506,9 @@ prompt-block and answer-widget rendering layer introduced in M1.
    - `list_input` gets a live multi-answer input renderer outside list-race.
    - `multiple_choice` is already playable; polish keyboard navigation and selected/
      locked state.
-   - `ordering`, `matching`, `image_choice`, and `hotspot` keep validated payload shapes
-     even if only basic scoring is implemented in v1.
+   - `ordering`, `matching`, and `image_choice` have basic live renderers and exact
+     payload scoring; polish mobile interaction and locked-state affordances.
+   - `hotspot` keeps a validated payload shape until a map/image-click renderer lands.
 2. **List race** (`apps/sessions/rounds/list_race.py` + `features/play/list-race/`):
    - Move current minimal list-race logic into a dedicated state-machine module.
    - Per-player `accepted_items: set` held server-side.

@@ -11,7 +11,7 @@ from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.judging.fuzzy import fuzzy_match
+from apps.judging.fuzzy import fuzzy_match, normalize_answer
 from apps.judging.llm import judge_typed_answer_with_llm
 from apps.quizzes.models import JudgeMode, Question, Quiz, QuizStatus, Round, RoundType
 from apps.sessions.models import AnswerSubmission, Session, SessionPlayer, SessionRole, SessionStatus
@@ -31,6 +31,7 @@ _AUTO_ADVANCE_LOCK = threading.Lock()
 _AUTO_ADVANCE_TIMERS: dict[str, threading.Timer] = {}
 _LOBBY_COUNTDOWN_LOCK = threading.Lock()
 _LOBBY_COUNTDOWN_TIMERS: dict[str, threading.Timer] = {}
+PLAYABLE_WIDGET_TYPES = {"text_input", "multiple_choice", "image_choice", "ordering", "matching"}
 
 
 class SessionCreateView(APIView):
@@ -372,7 +373,7 @@ def _playable_questions(session: Session) -> list[Question]:
         question
         for round_obj in session.quiz.rounds.all()
         for question in round_obj.questions.all()
-        if question.answer_widget.get("type") in {"text_input", "multiple_choice"}
+        if question.answer_widget.get("type") in PLAYABLE_WIDGET_TYPES
     ]
 
 
@@ -493,6 +494,10 @@ def _schedule_auto_advance(
     reason: str = "deadline",
     delay_s: float | None = None,
 ) -> None:
+    if not _background_timers_enabled():
+        _clear_auto_advance_timer(session.id)
+        return
+
     state = session.state or {}
     if session.status != SessionStatus.PLAYING or state.get("phase") not in AUTO_ADVANCE_PHASES:
         _clear_auto_advance_timer(session.id)
@@ -641,6 +646,10 @@ def _sync_lobby_countdown(session: Session) -> None:
 
 
 def _schedule_lobby_countdown(session: Session) -> None:
+    if not _background_timers_enabled():
+        _clear_lobby_countdown_timer(session.id)
+        return
+
     state = session.state or {}
     started_at = state.get("lobby_countdown_started_at")
     countdown_s = state.get("lobby_countdown_s")
@@ -722,6 +731,10 @@ def _clear_lobby_countdown_timer(session_id) -> None:
 
 def _lobby_countdown_s() -> int:
     return int(getattr(settings, "SESSION_LOBBY_COUNTDOWN_S", 5))
+
+
+def _background_timers_enabled() -> bool:
+    return bool(getattr(settings, "SESSION_BACKGROUND_TIMERS_ENABLED", True))
 
 
 def _without_lobby_countdown(state: dict) -> dict:
@@ -1101,13 +1114,17 @@ def _judge_submission(question: Question, submitted_text: str, submitted_payload
     widget_type = question.answer_widget.get("type")
     acceptable_answers = question.acceptable_answers or [question.canonical_answer]
 
-    if widget_type == "multiple_choice":
+    if widget_type in {"multiple_choice", "image_choice"}:
         accepted = submitted_text == question.canonical_answer or submitted_text in acceptable_answers
         return {
             "accepted": accepted,
             "judge_mode_used": "exact",
             "judge_metadata": {"submitted_payload": submitted_payload},
         }
+    if widget_type == "ordering":
+        return _judge_ordering_submission(question, submitted_payload)
+    if widget_type == "matching":
+        return _judge_matching_submission(question, submitted_payload)
 
     result = fuzzy_match(submitted_text, acceptable_answers)
     if not result["accepted"]:
@@ -1129,6 +1146,70 @@ def _judge_submission(question: Question, submitted_text: str, submitted_payload
         "judge_mode_used": JudgeMode.FUZZY,
         "judge_latency_ms": 0,
         "judge_metadata": result,
+    }
+
+
+def _judge_ordering_submission(question: Question, submitted_payload: dict) -> dict:
+    expected = _correct_payload(question)
+    submitted_order = submitted_payload.get("order")
+    if not isinstance(expected, list) or not isinstance(submitted_order, list):
+        return {
+            "accepted": False,
+            "judge_mode_used": "exact",
+            "judge_metadata": {
+                "expected_payload": expected,
+                "submitted_payload": submitted_payload,
+                "error": "ordering requires metadata.correct_payload and submitted_payload.order lists",
+            },
+        }
+
+    expected_normalized = [normalize_answer(str(item)) for item in expected]
+    submitted_normalized = [normalize_answer(str(item)) for item in submitted_order]
+    accepted = expected_normalized == submitted_normalized
+    return {
+        "accepted": accepted,
+        "judge_mode_used": "exact",
+        "judge_metadata": {
+            "expected_payload": expected,
+            "submitted_payload": submitted_payload,
+        },
+    }
+
+
+def _judge_matching_submission(question: Question, submitted_payload: dict) -> dict:
+    expected = _correct_payload(question)
+    submitted_matches = submitted_payload.get("matches")
+    if not isinstance(expected, dict) or not isinstance(submitted_matches, dict):
+        return {
+            "accepted": False,
+            "judge_mode_used": "exact",
+            "judge_metadata": {
+                "expected_payload": expected,
+                "submitted_payload": submitted_payload,
+                "error": "matching requires metadata.correct_payload and submitted_payload.matches objects",
+            },
+        }
+
+    accepted = _normalized_match_map(expected) == _normalized_match_map(submitted_matches)
+    return {
+        "accepted": accepted,
+        "judge_mode_used": "exact",
+        "judge_metadata": {
+            "expected_payload": expected,
+            "submitted_payload": submitted_payload,
+        },
+    }
+
+
+def _correct_payload(question: Question):
+    metadata = question.metadata if isinstance(question.metadata, dict) else {}
+    return metadata.get("correct_payload")
+
+
+def _normalized_match_map(value: dict) -> dict[str, str]:
+    return {
+        normalize_answer(str(key)): normalize_answer(str(item))
+        for key, item in value.items()
     }
 
 
