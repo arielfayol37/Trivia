@@ -417,6 +417,7 @@ export function QuizHome() {
   const [isInviteJoinMode, setIsInviteJoinMode] = useState(() => Boolean(initialJoinCode().trim()));
   const [liveSession, setLiveSession] = useState<LiveSession | null>(null);
   const [invitePreview, setInvitePreview] = useState<SessionInvitePreview | null>(null);
+  const [invitePreviewError, setInvitePreviewError] = useState<string | null>(null);
   const [isLoadingInvitePreview, setIsLoadingInvitePreview] = useState(false);
   const [localPlayerId, setLocalPlayerId] = useState<string | null>(null);
   const [isLoadingQuizzes, setIsLoadingQuizzes] = useState(true);
@@ -510,6 +511,7 @@ export function QuizHome() {
   useEffect(() => {
     if (!isInviteJoinMode) {
       setInvitePreview(null);
+      setInvitePreviewError(null);
       setIsLoadingInvitePreview(false);
       return;
     }
@@ -517,21 +519,25 @@ export function QuizHome() {
     const code = joinCode.trim();
     if (!code) {
       setInvitePreview(null);
+      setInvitePreviewError(null);
       setIsLoadingInvitePreview(false);
       return;
     }
 
     let cancelled = false;
     setIsLoadingInvitePreview(true);
+    setInvitePreviewError(null);
     getSessionInvitePreview(code)
       .then((preview) => {
         if (!cancelled) {
           setInvitePreview(preview);
+          setInvitePreviewError(null);
         }
       })
       .catch(() => {
         if (!cancelled) {
           setInvitePreview(null);
+          setInvitePreviewError("Room not found");
         }
       })
       .finally(() => {
@@ -826,6 +832,7 @@ export function QuizHome() {
       ) : isInviteJoinMode ? (
         <InviteJoinGate
           invitePreview={invitePreview}
+          invitePreviewError={invitePreviewError}
           isLoadingInvitePreview={isLoadingInvitePreview}
           isJoiningSession={isJoiningSession}
           joinCode={joinCode}
@@ -928,6 +935,7 @@ function TopBar({ health, dark }: { health: HealthResponse | null; dark: boolean
 
 function InviteJoinGate({
   invitePreview,
+  invitePreviewError,
   isLoadingInvitePreview,
   isJoiningSession,
   joinCode,
@@ -939,6 +947,7 @@ function InviteJoinGate({
   sessionError,
 }: {
   invitePreview: SessionInvitePreview | null;
+  invitePreviewError: string | null;
   isLoadingInvitePreview: boolean;
   isJoiningSession: boolean;
   joinCode: string;
@@ -950,7 +959,7 @@ function InviteJoinGate({
   sessionError: string | null;
 }) {
   const previewStatus = invitePreview?.status;
-  const canJoin = !previewStatus || previewStatus === "lobby";
+  const canJoin = !invitePreviewError && (!previewStatus || previewStatus === "lobby");
   const statusLabel =
     previewStatus === "playing"
       ? "Already playing"
@@ -999,6 +1008,10 @@ function InviteJoinGate({
                   <div className="flex items-center gap-2 text-sm font-semibold text-white/70">
                     <Loader2 className="h-4 w-4 animate-spin text-aqua" />
                     Checking room
+                  </div>
+                ) : invitePreviewError ? (
+                  <div className="rounded-md border border-inviteError/40 bg-inviteError/10 px-3 py-2 text-sm font-semibold text-inviteError">
+                    {invitePreviewError}
                   </div>
                 ) : invitePreview ? (
                   <>
