@@ -100,6 +100,8 @@ Implemented:
   - Known-offline players no longer block all-submit, all-wagered, or everyone-ready
     next-question advancement; players without socket presence are still counted so
     REST-only/fresh sessions do not advance too eagerly.
+  - Socket heartbeat pings refresh `last_seen_at`, and stale online presence stops
+    counting as active after `SESSION_PRESENCE_STALE_AFTER_S` (default 45s).
   - Late answers after the question deadline are rejected.
 - Play UI has a first-pass game-show/stage visual direction:
   - Player-facing Play Hub.
@@ -417,6 +419,8 @@ for every question.
 - Backend-owned auto-advance on all-submit and timeout.
 - Presence-aware active-player gates, so known-offline players do not freeze wager,
   all-submit, or ready-next progression.
+- Heartbeat-backed presence staleness cutoff for sockets that disappear without a clean
+  close.
 - REST-backed session state machine: lobby → playing → finished.
 - Sequential authored-question play; no default random 10-question sampling.
 - Text input and multiple-choice answer submission.

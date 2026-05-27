@@ -112,6 +112,8 @@ const quizCategoryFilters: Array<{ id: QuizCategoryId; label: string }> = [
 
 const playerColors = ["#3564ff", "#f05d5e", "#72e0b3", "#e8c87a", "#8a5cf6", "#f47b20", "#e83a8e", "#72e0b3"];
 const localSessionStorageKey = "trivia.localSession.v1";
+const presenceHeartbeatMs = 15_000;
+const presenceStaleAfterMs = 45_000;
 
 type StoredLocalSession = {
   invite_code: string;
@@ -358,8 +360,13 @@ function submissionFor(session: LiveSession, questionId: string, playerId: strin
 function playerPresence(session: LiveSession, playerId: string) {
   const presence = asRecord(asRecord(session.state).presence);
   const entry = asRecord(presence[playerId]);
+  const lastSeenAt = typeof entry.last_seen_at === "string" ? Date.parse(entry.last_seen_at) : null;
+  const isStale =
+    lastSeenAt !== null &&
+    Number.isFinite(lastSeenAt) &&
+    Date.now() - lastSeenAt > presenceStaleAfterMs;
   return {
-    online: entry.online === true,
+    online: entry.online === true && !isStale,
     known: Object.keys(entry).length > 0,
   };
 }
@@ -461,11 +468,16 @@ export function QuizHome() {
       }
     });
 
-    socket.addEventListener("open", () => {
-      socket.send(JSON.stringify({ type: "ping" }));
-    });
+    const sendHeartbeat = () => {
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: "ping" }));
+      }
+    };
 
-    const timer = window.setInterval(() => {
+    socket.addEventListener("open", sendHeartbeat);
+
+    const heartbeatTimer = window.setInterval(sendHeartbeat, presenceHeartbeatMs);
+    const pollTimer = window.setInterval(() => {
       getSession(liveSession.id)
         .then(setLiveSession)
         .catch(() => undefined);
@@ -473,7 +485,8 @@ export function QuizHome() {
 
     return () => {
       isClosed = true;
-      window.clearInterval(timer);
+      window.clearInterval(heartbeatTimer);
+      window.clearInterval(pollTimer);
       socket.close();
     };
   }, [liveSession?.id, localPlayerId]);

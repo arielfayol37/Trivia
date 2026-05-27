@@ -708,6 +708,53 @@ class SessionApiTests(TestCase):
         self.assertEqual(continue_response.json()["state"]["question_index"], 1)
         self.assertNotEqual(continue_response.json()["state"]["question_id"], first_question_id)
 
+    def test_stale_online_player_does_not_block_continue_advance(self):
+        create_response = self.client.post(
+            "/api/sessions/",
+            data={"quiz_id": str(self.quiz.id), "display_name": "Ariel", "question_count": 2},
+            content_type="application/json",
+        )
+        create_payload = create_response.json()
+        session_id = create_payload["session"]["id"]
+        host_id = create_payload["player_id"]
+        join_response = self.client.post(
+            "/api/sessions/join/",
+            data={"session_id": session_id, "display_name": "Friend"},
+            content_type="application/json",
+        )
+        friend_id = join_response.json()["player_id"]
+        start_response = self.client.post(f"/api/sessions/{session_id}/start/")
+        first_question_id = start_response.json()["state"]["question_id"]
+        canonical_answer = start_response.json()["quiz"]["rounds"][0]["questions"][0]["canonical_answer"]
+
+        session = _session_queryset().get(pk=session_id)
+        state = session.state
+        state["presence"] = {
+            host_id: {"online": True, "connection_count": 1, "last_seen_at": timezone.now().isoformat()},
+            friend_id: {
+                "online": True,
+                "connection_count": 1,
+                "last_seen_at": (timezone.now() - timedelta(seconds=90)).isoformat(),
+            },
+        }
+        session.state = state
+        session.save(update_fields=["state"])
+
+        self.client.post(
+            f"/api/sessions/{session_id}/players/{host_id}/answer/",
+            data={"submitted_text": canonical_answer},
+            content_type="application/json",
+        )
+
+        continue_response = self.client.post(
+            f"/api/sessions/{session_id}/players/{host_id}/continue/",
+            content_type="application/json",
+        )
+
+        self.assertEqual(continue_response.status_code, 200)
+        self.assertEqual(continue_response.json()["state"]["question_index"], 1)
+        self.assertNotEqual(continue_response.json()["state"]["question_id"], first_question_id)
+
     def test_continue_requires_submission_before_deadline(self):
         create_response = self.client.post(
             "/api/sessions/",
@@ -1274,6 +1321,23 @@ class SessionRealtimeTests(TransactionTestCase):
         presence = snapshot["session"]["state"]["presence"][player_id]
         self.assertTrue(presence["online"])
         self.assertEqual(presence["connection_count"], 1)
+        self.assertIn("last_seen_at", presence)
+
+        await communicator.send_json_to({"type": "ping"})
+        for _ in range(3):
+            message = await communicator.receive_json_from(timeout=5)
+            if message["type"] == "pong":
+                break
+        else:
+            self.fail("Socket ping did not receive pong")
+
+        touched_presence = await database_sync_to_async(self._player_presence)(
+            session_id,
+            player_id,
+        )
+        self.assertTrue(touched_presence["online"])
+        self.assertEqual(touched_presence["connection_count"], 1)
+        self.assertIn("last_seen_at", touched_presence)
 
         await communicator.disconnect()
 

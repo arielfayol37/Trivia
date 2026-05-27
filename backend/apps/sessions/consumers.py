@@ -60,6 +60,8 @@ class SessionConsumer(AsyncJsonWebsocketConsumer):
 
     async def receive_json(self, content, **_kwargs):
         if content.get("type") == "ping":
+            if self.player_id:
+                await self._touch_player_presence(self.session_id, self.player_id)
             await self.send_json({"type": "pong"})
 
     async def session_snapshot(self, event):
@@ -113,6 +115,34 @@ class SessionConsumer(AsyncJsonWebsocketConsumer):
             entry.update(
                 {
                     "online": connection_count > 0,
+                    "connection_count": connection_count,
+                    "last_seen_at": now,
+                }
+            )
+            presence[player_key] = entry
+            state["presence"] = presence
+            session.state = state
+            session.save(update_fields=["state"])
+
+    @database_sync_to_async
+    def _touch_player_presence(self, session_id: UUID, player_id: UUID) -> None:
+        with transaction.atomic():
+            session = Session.objects.select_for_update().get(pk=session_id)
+            if not SessionPlayer.objects.filter(pk=player_id, session=session).exists():
+                return
+
+            state = session.state or {}
+            raw_presence = state.get("presence")
+            presence = raw_presence if isinstance(raw_presence, dict) else {}
+            player_key = str(player_id)
+            raw_entry = presence.get(player_key)
+            entry = raw_entry if isinstance(raw_entry, dict) else {}
+            connection_count = max(1, int(entry.get("connection_count") or 0))
+            now = timezone.now().isoformat()
+
+            entry.update(
+                {
+                    "online": True,
                     "connection_count": connection_count,
                     "last_seen_at": now,
                 }

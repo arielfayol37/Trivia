@@ -655,7 +655,20 @@ def _player_is_presence_active(state: dict, player_id: str) -> bool:
     entry = presence.get(player_id)
     if not isinstance(entry, dict):
         return True
-    return entry.get("online") is not False
+    if entry.get("online") is False:
+        return False
+    if entry.get("online") is not True:
+        return True
+
+    last_seen_at = entry.get("last_seen_at")
+    if not isinstance(last_seen_at, str):
+        return True
+    parsed = parse_datetime(last_seen_at)
+    if parsed is None:
+        return True
+    if timezone.is_naive(parsed):
+        parsed = timezone.make_aware(parsed, timezone.get_current_timezone())
+    return timezone.now() - parsed <= timedelta(seconds=_presence_stale_after_s())
 
 
 def sync_session_after_presence_change(session_id) -> None:
@@ -847,6 +860,10 @@ def _all_submitted_advance_delay_s() -> float:
 
 def _timer_grace_s() -> float:
     return float(getattr(settings, "SESSION_TIMER_ADVANCE_GRACE_S", 4.0))
+
+
+def _presence_stale_after_s() -> float:
+    return float(getattr(settings, "SESSION_PRESENCE_STALE_AFTER_S", 45.0))
 
 
 def _question_state(
