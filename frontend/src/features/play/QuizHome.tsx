@@ -1428,7 +1428,7 @@ function ListRaceRoom({
   return (
     <>
       <div className="mx-auto max-w-6xl px-5 py-6 pb-32">
-        <div className="flex items-center justify-between gap-3 text-[10px] font-bold uppercase tracking-[0.5em] text-stagegold">
+        <div className="flex items-center justify-between gap-3 pr-14 text-[10px] font-bold uppercase tracking-[0.5em] text-stagegold">
           <span>List race</span>
           <span className="text-white/55">
             {playerFound.length} / {itemsCount || "?"}
@@ -1524,7 +1524,6 @@ function ListRaceRoom({
 
       <RoomChatPanel
         disabled={!localPlayerId}
-        dock="chyron"
         localPlayerId={localPlayerId}
         mode="drawer"
         onSendChat={onSendChat}
@@ -1622,7 +1621,7 @@ function PlayingRoom({
       </AnimatePresence>
 
       <div className={`mx-auto max-w-6xl px-5 py-5 ${shouldRevealAnswers ? "pb-64" : "pb-32"}`}>
-        <div className="flex items-center justify-between gap-3 text-[10px] font-bold uppercase tracking-[0.5em] text-stagegold">
+        <div className="flex items-center justify-between gap-3 pr-14 text-[10px] font-bold uppercase tracking-[0.5em] text-stagegold">
           <span>
             Round {roundNumber} · {round ? roundLabel(round.type) : ""}
           </span>
@@ -1707,8 +1706,6 @@ function PlayingRoom({
       ) : null}
       <RoomChatPanel
         disabled={!localPlayerId}
-        dock="chyron"
-        lifted={shouldRevealAnswers}
         localPlayerId={localPlayerId}
         mode="drawer"
         onSendChat={onSendChat}
@@ -2000,8 +1997,6 @@ function multipleChoiceOptions(widget: Extract<AnswerWidget, { type: "multiple_c
 
 function RoomChatPanel({
   disabled,
-  dock = "chyron",
-  lifted = false,
   localPlayerId,
   mode = "panel",
   onSendChat,
@@ -2009,8 +2004,6 @@ function RoomChatPanel({
   tone,
 }: {
   disabled: boolean;
-  dock?: "screen" | "chyron";
-  lifted?: boolean;
   localPlayerId: string | null;
   mode?: "panel" | "drawer";
   onSendChat: (message: string) => Promise<void>;
@@ -2024,8 +2017,7 @@ function RoomChatPanel({
   const [seenMessageCount, setSeenMessageCount] = useState(messages.length);
   const isDark = tone === "dark";
   const unreadCount = Math.max(0, messages.length - seenMessageCount);
-  const bottomClass = lifted ? "bottom-56" : dock === "screen" ? "bottom-4" : "bottom-20";
-  const panelHeightClass = lifted ? "max-h-[46vh]" : "max-h-[70vh]";
+  const panelHeightClass = "max-h-[calc(100vh-5rem)]";
 
   useEffect(() => {
     if (mode === "panel") {
@@ -2134,14 +2126,15 @@ function RoomChatPanel({
     return (
       <>
         <button
-          className={`fixed right-4 ${bottomClass} z-40 inline-flex h-12 items-center gap-2 rounded-full border border-stagegold/45 bg-stagegold px-4 text-sm font-black uppercase tracking-wider text-midnight shadow-stage transition hover:bg-champagne`}
+          aria-label="Room chat"
+          className="fixed right-3 top-3 z-40 inline-flex h-10 w-10 items-center justify-center rounded-full border border-stagegold/45 bg-stagegold text-midnight shadow-stage transition hover:bg-champagne"
           onClick={() => setIsOpen(true)}
+          title="Room chat"
           type="button"
         >
-          <MessageCircle className="h-4 w-4" />
-          Chat
+          <MessageCircle className="h-5 w-5" />
           {unreadCount > 0 ? (
-            <span className="ml-1 rounded-full bg-coral px-2 py-0.5 text-[10px] text-white">
+            <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-coral px-1 text-[10px] font-black text-white">
               {unreadCount}
             </span>
           ) : null}
@@ -2150,7 +2143,7 @@ function RoomChatPanel({
           {isOpen ? (
             <motion.div
               animate={{ opacity: 1, y: 0 }}
-              className={`fixed inset-x-3 ${bottomClass} z-50 sm:left-auto sm:right-4 sm:w-[380px]`}
+              className="fixed inset-x-3 top-16 z-50 sm:left-auto sm:right-4 sm:w-[380px]"
               exit={{ opacity: 0, y: 16 }}
               initial={{ opacity: 0, y: 16 }}
               transition={{ duration: 0.18 }}
@@ -2320,7 +2313,7 @@ function FinishedRoom({
               variant="stage"
             >
               <RotateCcw className="h-4 w-4" />
-              Play again
+              New lobby
             </Button>
             <Button
               className="bg-white text-midnight hover:bg-pale"
@@ -2372,7 +2365,6 @@ function FinishedRoom({
       </div>
       <RoomChatPanel
         disabled={!localPlayerId}
-        dock="screen"
         localPlayerId={localPlayerId}
         mode="drawer"
         onSendChat={onSendChat}

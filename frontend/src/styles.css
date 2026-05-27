@@ -28,6 +28,14 @@ textarea {
   resize: vertical;
 }
 
+@media (max-width: 640px) {
+  input,
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+}
+
 ::selection {
   background: #f7c948;
   color: #101421;

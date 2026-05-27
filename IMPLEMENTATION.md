@@ -84,10 +84,12 @@ Implemented:
   - Live question screen with timer, answer panel, verdict reveal, and bottom score
     chyron.
   - In-session site chrome is hidden during active play/finished states.
-  - During play and post-game, room chat collapses into a floating tab with unread
-    count instead of taking permanent screen space.
+  - During play and post-game, room chat collapses into a small top-right icon with an
+    unread count instead of taking permanent screen space.
   - Correct answer and player submissions now reveal in a fixed compact dock above the
     score chyron, reducing scroll on phone-sized screens.
+  - Mobile form controls use 16px text to avoid iOS/Safari zooming into focused answer
+    and chat fields.
   - Question prompt text is larger in play mode so short prompts use the card more
     intentionally.
 
