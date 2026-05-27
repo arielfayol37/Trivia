@@ -363,6 +363,7 @@ FORMAT_EXAMPLES = {
         "notes": [
             "Players see metadata.category_hint before they see prompt_blocks.",
             "After players wager, the normal question prompt is revealed.",
+            "The server turns min_bet/max_bet into one reusable wager deck card per question, spread across the range. Use wager_values only for an explicit custom deck.",
             "Use this for risk/reward strategy, not for every ordinary question.",
         ],
     },
@@ -484,7 +485,7 @@ def _user_prompt(prompt: str, source_text: str) -> dict:
             "For fuzzy text_input questions, include non-empty canonical_answer and acceptable_answers.",
             "If a text_input answer cannot be enumerated, set judge_mode to llm and provide a concise canonical_answer/rubric.",
             "For multiple_choice widgets, use choices as an array of strings and set canonical_answer to the exact correct choice text.",
-            "For meta_strategy rounds, set round config min_bet, max_bet, default_bet, bet_window_s, answer_timeout_s, and put a concise pre-question hint in each question's metadata.category_hint.",
+            "For meta_strategy rounds, set round config min_bet, max_bet, default_bet, bet_window_s, answer_timeout_s, and put a concise pre-question hint in each question's metadata.category_hint. The server will expose one wager card per question, spread across min_bet/max_bet, unless wager_values is explicitly set.",
             "Every non-list-race question must include a playable answer key.",
             "For list_race rounds, config.prompt and config.items must be non-empty; every item needs canonical and acceptable variants.",
             "Use LaTeX strings for math blocks, without Markdown fences.",

@@ -212,6 +212,30 @@ function numberFrom(value: unknown, fallback: number) {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
+function spreadWagerValues(minBet: number, maxBet: number, questionCount: number) {
+  const safeMin = Math.trunc(minBet);
+  const safeMax = Math.max(safeMin, Math.trunc(maxBet));
+  const safeQuestionCount = Math.max(1, Math.trunc(questionCount));
+  const availableCount = safeMax - safeMin + 1;
+  if (safeQuestionCount >= availableCount) {
+    return Array.from({ length: availableCount }, (_, index) => safeMin + index);
+  }
+  if (safeQuestionCount === 1) {
+    return [safeMin];
+  }
+
+  const values: number[] = [];
+  for (let index = 0; index < safeQuestionCount; index += 1) {
+    const rawValue = safeMin + ((safeMax - safeMin) * index) / (safeQuestionCount - 1);
+    let value = Math.round(rawValue);
+    if (values.length && value <= values[values.length - 1]) {
+      value = values[values.length - 1] + 1;
+    }
+    values.push(Math.min(value, safeMax));
+  }
+  return values;
+}
+
 function chatMessages(session: LiveSession): SessionChatMessage[] {
   const messages = asRecord(session.state).chat_messages;
   if (!Array.isArray(messages)) {
@@ -1474,7 +1498,7 @@ function BettingRoom({
   const bets = asRecord(asRecord(metaStrategy.bets)[questionId]);
   const minBet = numberFrom(current.min_bet, 1);
   const maxBet = numberFrom(current.max_bet, 10);
-  const defaultBet = numberFrom(current.default_bet, minBet);
+  const roundQuestionCount = round?.questions.length ?? questionProgress(session).count;
   const hint = String(current.hint ?? "Mystery question");
   const localBet = localPlayerId ? asRecord(bets[localPlayerId]) : {};
   const lockedPoints = typeof localBet.points === "number" ? localBet.points : null;
@@ -1483,11 +1507,20 @@ function BettingRoom({
     (localPlayerId && Array.isArray(usedWagers[localPlayerId]) ? usedWagers[localPlayerId] : [])
       .filter((points): points is number => typeof points === "number"),
   );
-  const wagerOptions = Array.from(
-    { length: Math.max(0, maxBet - minBet + 1) },
-    (_, index) => minBet + index,
+  const configuredWagerValues = Array.isArray(current.wager_values)
+    ? current.wager_values.filter((points): points is number => typeof points === "number")
+    : [];
+  const wagerOptions = (
+    configuredWagerValues.length
+      ? configuredWagerValues
+      : spreadWagerValues(minBet, maxBet, roundQuestionCount)
   ).slice(0, 20);
-  const firstAvailableWager = wagerOptions.find((points) => !localUsedWagers.has(points)) ?? defaultBet;
+  const rawDefaultBet = numberFrom(current.default_bet, wagerOptions[0] ?? minBet);
+  const defaultBet = wagerOptions.includes(rawDefaultBet) ? rawDefaultBet : wagerOptions[0] ?? rawDefaultBet;
+  const firstAvailableWager =
+    !localUsedWagers.has(defaultBet)
+      ? defaultBet
+      : wagerOptions.find((points) => !localUsedWagers.has(points)) ?? defaultBet;
   const [selectedBet, setSelectedBet] = useState(firstAvailableWager);
   const lockedPlayers = session.players.filter((player) => {
     const wager = asRecord(bets[player.id]);
@@ -1546,7 +1579,7 @@ function BettingRoom({
                   Your wager
                 </div>
 
-                <div className="mt-3 grid grid-cols-5 gap-2">
+                <div className="mt-3 grid grid-cols-[repeat(auto-fit,minmax(3.25rem,1fr))] gap-2">
                   {wagerOptions.map((points) => (
                     <button
                       className={`h-12 rounded-md border text-lg font-black tabular-nums transition ${
@@ -1574,6 +1607,10 @@ function BettingRoom({
                 {localUsedWagers.size ? (
                   <div className="mt-2 text-xs font-semibold text-white/55">
                     Already used this round: {[...localUsedWagers].sort((a, b) => a - b).join(", ")}
+                  </div>
+                ) : wagerOptions.length ? (
+                  <div className="mt-2 text-xs font-semibold text-white/55">
+                    {wagerOptions.length} point {wagerOptions.length === 1 ? "card" : "cards"} in this round
                   </div>
                 ) : null}
 

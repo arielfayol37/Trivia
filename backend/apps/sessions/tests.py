@@ -768,6 +768,7 @@ class SessionApiTests(TestCase):
             start_response.json()["state"]["meta_strategy"]["current"]["hint"],
             "Foundations of quantum mechanics",
         )
+        self.assertEqual(start_response.json()["state"]["meta_strategy"]["current"]["wager_values"], [1])
 
         premature_answer = self.client.post(
             f"/api/sessions/{session_id}/players/{player_id}/answer/",
@@ -778,7 +779,7 @@ class SessionApiTests(TestCase):
 
         wager_response = self.client.post(
             f"/api/sessions/{session_id}/players/{player_id}/wager/",
-            data={"points": 7},
+            data={"points": 1},
             content_type="application/json",
         )
 
@@ -786,7 +787,7 @@ class SessionApiTests(TestCase):
         question_id = wager_response.json()["state"]["question_id"]
         self.assertEqual(
             wager_response.json()["state"]["meta_strategy"]["bets"][question_id][player_id]["points"],
-            7,
+            1,
         )
 
         session = _session_queryset().get(pk=session_id)
@@ -806,9 +807,67 @@ class SessionApiTests(TestCase):
         payload = answer_response.json()
         submission = payload["state"]["submissions"][question_id][player_id]
         self.assertTrue(submission["accepted"])
-        self.assertEqual(submission["wager"], 7.0)
-        self.assertEqual(submission["points_awarded"], 7.0)
-        self.assertEqual(payload["state"]["scores"][player_id], 7.0)
+        self.assertEqual(submission["wager"], 1.0)
+        self.assertEqual(submission["points_awarded"], 1.0)
+        self.assertEqual(payload["state"]["scores"][player_id], 1.0)
+
+    def test_meta_strategy_wager_values_match_round_question_count(self):
+        questions = [
+            {
+                "order": index + 1,
+                "prompt_blocks": [{"type": "text", "text": f"Answer {index + 1}?"}],
+                "answer_widget": {"type": "text_input"},
+                "canonical_answer": f"answer {index + 1}",
+                "acceptable_answers": [f"answer {index + 1}"],
+                "judge_mode": "fuzzy",
+                "metadata": {"category_hint": f"Hint {index + 1}"},
+            }
+            for index in range(4)
+        ]
+        meta_quiz = create_quiz_from_document(
+            {
+                "title": "Strategic Spread",
+                "description": "Scaled wager cards.",
+                "topic": "strategy",
+                "difficulty": "medium",
+                "rounds": [
+                    {
+                        "type": "meta_strategy",
+                        "order": 1,
+                        "config": {
+                            "min_bet": 1,
+                            "max_bet": 10,
+                            "default_bet": 1,
+                            "bet_window_s": 10,
+                            "answer_timeout_s": 20,
+                        },
+                        "questions": questions,
+                    }
+                ],
+            },
+            AuthoringContext(),
+        )
+        meta_quiz.status = QuizStatus.READY
+        meta_quiz.save(update_fields=["status"])
+        create_response = self.client.post(
+            "/api/sessions/",
+            data={"quiz_id": str(meta_quiz.id), "display_name": "Ariel"},
+            content_type="application/json",
+        )
+        session_id = create_response.json()["session"]["id"]
+
+        start_response = self.client.post(f"/api/sessions/{session_id}/start/")
+
+        current = start_response.json()["state"]["meta_strategy"]["current"]
+        self.assertEqual(current["wager_values"], [1, 4, 7, 10])
+
+        invalid_wager = self.client.post(
+            f"/api/sessions/{session_id}/players/{create_response.json()['player_id']}/wager/",
+            data={"points": 2},
+            content_type="application/json",
+        )
+        self.assertEqual(invalid_wager.status_code, 400)
+        self.assertIn("1, 4, 7, 10", invalid_wager.json()["detail"])
 
     def test_meta_strategy_defaults_wager_on_betting_timeout(self):
         meta_quiz = create_quiz_from_document(
@@ -934,7 +993,7 @@ class SessionApiTests(TestCase):
         self.client.post(f"/api/sessions/{session_id}/start/")
         self.client.post(
             f"/api/sessions/{session_id}/players/{player_id}/wager/",
-            data={"points": 2},
+            data={"points": 1},
             content_type="application/json",
         )
         session = _session_queryset().get(pk=session_id)
@@ -948,11 +1007,12 @@ class SessionApiTests(TestCase):
 
         self.assertEqual(next_response.status_code, 200)
         self.assertEqual(next_response.json()["state"]["phase"], "betting")
-        self.assertEqual(next_response.json()["state"]["meta_strategy"]["current"]["used_wagers"][player_id], [2])
+        self.assertEqual(next_response.json()["state"]["meta_strategy"]["current"]["wager_values"], [1, 3])
+        self.assertEqual(next_response.json()["state"]["meta_strategy"]["current"]["used_wagers"][player_id], [1])
 
         repeated_wager = self.client.post(
             f"/api/sessions/{session_id}/players/{player_id}/wager/",
-            data={"points": 2},
+            data={"points": 1},
             content_type="application/json",
         )
         self.assertEqual(repeated_wager.status_code, 400)
@@ -1041,7 +1101,7 @@ class SessionApiTests(TestCase):
         payload = self.client.get(f"/api/sessions/{session_id}/").json()
         question_id = payload["state"]["question_id"]
         defaulted_wager = payload["state"]["meta_strategy"]["bets"][question_id][player_id]
-        self.assertEqual(defaulted_wager["points"], 2)
+        self.assertEqual(defaulted_wager["points"], 3)
         self.assertTrue(defaulted_wager["defaulted"])
 
 

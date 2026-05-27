@@ -802,6 +802,7 @@ def _meta_strategy_betting_state(
         "min_bet": config["min_bet"],
         "max_bet": config["max_bet"],
         "default_bet": config["default_bet"],
+        "wager_values": config["wager_values"],
         "bet_window_s": config["bet_window_s"],
         "answer_timeout_s": config["answer_timeout_s"],
         "used_wagers": _meta_strategy_used_wagers_by_player(
@@ -859,6 +860,7 @@ def _meta_strategy_answer_state(
         "min_bet": config["min_bet"],
         "max_bet": config["max_bet"],
         "default_bet": config["default_bet"],
+        "wager_values": config["wager_values"],
         "bet_window_s": config["bet_window_s"],
         "answer_timeout_s": config["answer_timeout_s"],
         "revealed_at": timezone.now().isoformat(),
@@ -886,8 +888,8 @@ def _place_meta_strategy_wager(session: Session, player: SessionPlayer, points: 
         return "No active meta-strategy question"
 
     config = _meta_strategy_config(question.round)
-    if points < config["min_bet"] or points > config["max_bet"]:
-        return f"Wager must be between {config['min_bet']} and {config['max_bet']}"
+    if points not in config["wager_values"]:
+        return f"Wager must be one of: {', '.join(str(value) for value in config['wager_values'])}"
 
     state = session.state or {}
     meta_strategy = _meta_strategy_state(state)
@@ -951,20 +953,52 @@ def _apply_default_meta_strategy_wagers(session: Session, question: Question) ->
     session.state = state
 
 
-def _meta_strategy_config(round_obj: Round) -> dict[str, int]:
+def _meta_strategy_config(round_obj: Round) -> dict:
     min_bet = int(round_obj.config.get("min_bet", 1))
     max_bet = int(round_obj.config.get("max_bet", 10))
     if max_bet < min_bet:
         max_bet = min_bet
+    wager_values = _meta_strategy_wager_values(round_obj, min_bet, max_bet)
     default_bet = int(round_obj.config.get("default_bet", min_bet))
     default_bet = min(max(default_bet, min_bet), max_bet)
+    if default_bet not in wager_values:
+        default_bet = wager_values[0]
     return {
         "min_bet": min_bet,
         "max_bet": max_bet,
         "default_bet": default_bet,
+        "wager_values": wager_values,
         "bet_window_s": int(round_obj.config.get("bet_window_s", 10)),
         "answer_timeout_s": int(round_obj.config.get("answer_timeout_s", 25)),
     }
+
+
+def _meta_strategy_wager_values(round_obj: Round, min_bet: int, max_bet: int) -> list[int]:
+    explicit_values = round_obj.config.get("wager_values")
+    if isinstance(explicit_values, list):
+        values = sorted({
+            int(value)
+            for value in explicit_values
+            if isinstance(value, int) or (isinstance(value, float) and value.is_integer())
+        })
+        if values:
+            return values
+
+    question_count = max(1, round_obj.questions.count())
+    available_count = max_bet - min_bet + 1
+    if question_count >= available_count:
+        return list(range(min_bet, max_bet + 1))
+    if question_count == 1:
+        return [min_bet]
+
+    values: list[int] = []
+    for index in range(question_count):
+        raw_value = min_bet + ((max_bet - min_bet) * index / (question_count - 1))
+        value = int(round(raw_value))
+        if values and value <= values[-1]:
+            value = values[-1] + 1
+        values.append(min(value, max_bet))
+    return values
 
 
 def _meta_strategy_hint(question: Question) -> str:
@@ -1060,10 +1094,10 @@ def _meta_strategy_used_wagers_by_player(
     }
 
 
-def _default_meta_strategy_wager(config: dict[str, int], used_wagers: set[int]) -> int:
+def _default_meta_strategy_wager(config: dict, used_wagers: set[int]) -> int:
     if config["default_bet"] not in used_wagers:
         return config["default_bet"]
-    for points in range(config["min_bet"], config["max_bet"] + 1):
+    for points in config["wager_values"]:
         if points not in used_wagers:
             return points
     return config["default_bet"]
