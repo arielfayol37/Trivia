@@ -16,6 +16,9 @@ Implemented:
 
 - Backend Django project, local `uv` virtualenv, SQLite fallback, models, migrations,
   admin registration, health endpoint, quiz serializers, and authoring/session APIs.
+- Docker compose is prepared for the desktop path: Postgres + Redis + Django ASGI +
+  Caddy, frontend built into the Caddy image, Django migrations run on container startup,
+  and `.env.docker.example` documents the Windows/Cloudflare settings.
 - Core data model for quizzes, rounds, questions, prompt blocks, answer widgets,
   sessions, players, submissions, round results, anti-cheat events, and leaderboard
   entries.

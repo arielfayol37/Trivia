@@ -25,6 +25,7 @@ services:
     env_file:
       - .env
     environment:
+      DATABASE_ENGINE: postgres
       POSTGRES_HOST: postgres
       REDIS_URL: redis://redis:6379/0
       CHANNEL_LAYER_BACKEND: redis
@@ -33,19 +34,21 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
-    command: ["daphne", "-b", "0.0.0.0", "-p", "8000", "trivia.asgi:application"]
-    volumes:
-      - ./backend:/app
-
+    command:
+      [
+        "sh",
+        "-c",
+        "python manage.py migrate --noinput && daphne -b 0.0.0.0 -p 8000 trivia.asgi:application",
+      ]
   caddy:
-    image: caddy:2-alpine
+    build:
+      context: ./frontend
     depends_on:
       - django
     ports:
       - "8080:80"
     volumes:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
-      - ./frontend/dist:/srv/frontend:ro
       - caddy_data:/data
       - caddy_config:/config
 

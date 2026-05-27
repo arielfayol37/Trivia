@@ -55,7 +55,8 @@ shown in the frontend terminal.
 ```bash
 cd backend
 uv run python manage.py check
-uv run python manage.py test apps.authoring apps.judging
+uv run python manage.py test apps.authoring apps.quizzes apps.sessions apps.judging
+uv run ruff check apps/authoring apps/quizzes apps/sessions trivia
 ```
 
 ```bash
@@ -69,3 +70,38 @@ npm run build
 The production target is the Windows desktop: Django ASGI, Postgres, Redis, Caddy, and
 Cloudflare Tunnel. Docker files are included as templates, but Docker is not required
 for the early local Mac workflow.
+
+## Windows Desktop Docker Setup
+
+After cloning the repo on the desktop, create a Docker env file:
+
+```powershell
+Copy-Item .env.docker.example .env
+```
+
+Edit `.env` before starting:
+
+- Set `DJANGO_SECRET_KEY` to a long random value.
+- Set `POSTGRES_PASSWORD` to a real password.
+- For local desktop testing, keep `DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1,[::1]`.
+- For Cloudflare Tunnel, add the public hostname to `DJANGO_ALLOWED_HOSTS` and
+  `CORS_ALLOWED_ORIGINS`, for example `https://trivia.example.com`.
+- Set `LLM_PROVIDER`, API keys, and model names only on the desktop `.env`; never commit
+  that file.
+
+Build and run:
+
+```powershell
+docker compose up --build
+```
+
+Open `http://localhost:8080`. The compose stack builds the frontend, serves it through
+Caddy, proxies `/api/*` and `/ws/*` to Django, runs migrations on Django startup, and
+uses Postgres + Redis containers.
+
+For Cloudflare Tunnel later, copy `cloudflared/config.example.yml` to
+`cloudflared/config.yml`, fill the real tunnel id/hostname/credentials path, then run:
+
+```powershell
+docker compose --profile tunnel up --build
+```
