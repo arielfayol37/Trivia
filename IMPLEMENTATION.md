@@ -34,6 +34,15 @@ Implemented:
   generator, but the same schema and persistence path are exercised.
 - Authoring chat now calls the backend LLM provider instead of a canned frontend helper.
   OpenAI-backed chat has been verified with the current configured model constraints.
+- Authoring source material is sent to both chat and draft generation. Draft generation
+  also persists pasted source text even if the model does not echo a `source_material`
+  field in its JSON response.
+- The authoring prompt includes concrete format examples for flag sprint, text input,
+  multiple choice, math, table, source excerpt, list race, ordering, matching,
+  image choice, and hotspot questions. Flag sprint mode is explicitly defined as
+  sequential `sync_open` image prompts with `text_input` answers, not a `list_race`.
+- `Draft now` includes pending text in the message box, so users do not have to hit
+  `Send` before drafting from a freshly pasted brief/source snippet.
 - Prompt blocks and answer widgets are modeled/rendered from the start, so the project is
   not locked into plain text prompts.
 - Supported prompt block rendering:

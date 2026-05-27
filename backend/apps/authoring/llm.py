@@ -19,6 +19,10 @@ do not assume every question is plain text.
 Supported prompt block types: text, image, table, math, source_excerpt, diagram_spec.
 Supported answer widget types: text_input, list_input, multiple_choice, ordering,
 matching, image_choice, hotspot.
+Use the format_examples in the user payload as concrete patterns to copy.
+When the request asks for a flag sprint or image-identification sprint, create
+sync_open questions with image prompt blocks and text_input answers. Do not turn that
+into list_race unless the user explicitly asks players to name all items from memory.
 """
 
 AUTHORING_CHAT_SYSTEM_PROMPT = """You are an expert quiz producer inside a multiplayer trivia authoring tool.
@@ -165,6 +169,173 @@ OPENAI_QUIZ_RESPONSE_FORMAT = {
     },
 }
 
+FORMAT_EXAMPLES = {
+    "flag_sprint": {
+        "round": {
+            "type": "sync_open",
+            "config": {
+                "answer_timeout_s": 20,
+                "points_per_question": 10,
+                "runner": "sequential_image_sprint",
+            },
+            "questions": [
+                {
+                    "prompt_blocks": [
+                        {
+                            "type": "image",
+                            "url": "https://example.com/flags/cm.png",
+                            "alt": "Flag of Cameroon",
+                            "caption": "Name the country.",
+                        }
+                    ],
+                    "answer_widget": {"type": "text_input", "placeholder": "Country name"},
+                    "canonical_answer": "Cameroon",
+                    "acceptable_answers": ["Cameroon", "Republic of Cameroon", "Cameroun"],
+                    "judge_mode": "fuzzy",
+                    "metadata": {"source_kind": "country_flag"},
+                }
+            ],
+        },
+        "notes": [
+            "Use one question per flag image.",
+            "Preserve source image URLs exactly in prompt_blocks[].url.",
+            "The visible prompt should be the image, not the country name.",
+        ],
+    },
+    "classic_text_input": {
+        "question": {
+            "prompt_blocks": [{"type": "text", "text": "What city is Cameroon's political capital?"}],
+            "answer_widget": {"type": "text_input", "placeholder": "City name"},
+            "canonical_answer": "Yaounde",
+            "acceptable_answers": ["Yaounde", "Yaounde, Cameroon"],
+            "judge_mode": "fuzzy",
+        }
+    },
+    "multiple_choice": {
+        "question": {
+            "prompt_blocks": [{"type": "text", "text": "Which country uses this currency: CFA franc?"}],
+            "answer_widget": {
+                "type": "multiple_choice",
+                "choices": ["Cameroon", "Japan", "Brazil", "Canada"],
+            },
+            "canonical_answer": "Cameroon",
+            "acceptable_answers": ["Cameroon"],
+            "judge_mode": "fuzzy",
+        }
+    },
+    "math_prompt": {
+        "question": {
+            "prompt_blocks": [
+                {"type": "text", "text": "Identify the equation."},
+                {"type": "math", "latex": "i\\hbar\\frac{\\partial}{\\partial t}\\Psi=\\hat{H}\\Psi"},
+            ],
+            "answer_widget": {"type": "text_input"},
+            "canonical_answer": "time-dependent Schrodinger equation",
+            "acceptable_answers": ["time-dependent Schrodinger equation", "TDSE"],
+            "judge_mode": "fuzzy",
+        }
+    },
+    "table_prompt": {
+        "question": {
+            "prompt_blocks": [
+                {
+                    "type": "table",
+                    "columns": ["Clue", "Value"],
+                    "rows": [["Largest city", "Douala"], ["Official languages", "French and English"]],
+                }
+            ],
+            "answer_widget": {"type": "text_input"},
+            "canonical_answer": "Cameroon",
+            "acceptable_answers": ["Cameroon"],
+            "judge_mode": "fuzzy",
+        }
+    },
+    "source_excerpt": {
+        "question": {
+            "prompt_blocks": [
+                {
+                    "type": "source_excerpt",
+                    "text": "The lecture describes a behavioral observation, then tests competing hypotheses.",
+                    "citation": "User source material",
+                }
+            ],
+            "answer_widget": {"type": "text_input"},
+            "canonical_answer": "hypothesis testing",
+            "acceptable_answers": ["hypothesis testing", "experimental design"],
+            "judge_mode": "llm",
+        }
+    },
+    "list_race": {
+        "round": {
+            "type": "list_race",
+            "config": {
+                "prompt": "Name the countries that border Cameroon.",
+                "time_limit_s": 90,
+                "items": [
+                    {"canonical": "Nigeria", "acceptable": ["Nigeria"]},
+                    {"canonical": "Chad", "acceptable": ["Chad"]},
+                ],
+            },
+            "questions": [],
+        },
+        "notes": ["Use list_race only when players should recall many answers from one prompt."],
+    },
+    "ordering": {
+        "question": {
+            "prompt_blocks": [{"type": "text", "text": "Order these countries by population, largest first."}],
+            "answer_widget": {"type": "ordering", "items": ["Cameroon", "Gabon", "Chad"]},
+            "canonical_answer": "Cameroon > Chad > Gabon",
+            "acceptable_answers": ["Cameroon > Chad > Gabon"],
+            "judge_mode": "fuzzy",
+            "metadata": {"correct_payload": ["Cameroon", "Chad", "Gabon"]},
+        }
+    },
+    "matching": {
+        "question": {
+            "prompt_blocks": [{"type": "text", "text": "Match each country to its capital."}],
+            "answer_widget": {
+                "type": "matching",
+                "left": ["Cameroon", "Japan"],
+                "right": ["Yaounde", "Tokyo"],
+            },
+            "canonical_answer": "Cameroon-Yaounde; Japan-Tokyo",
+            "acceptable_answers": ["Cameroon-Yaounde; Japan-Tokyo"],
+            "judge_mode": "fuzzy",
+            "metadata": {"correct_payload": {"Cameroon": "Yaounde", "Japan": "Tokyo"}},
+        }
+    },
+    "image_choice": {
+        "question": {
+            "prompt_blocks": [{"type": "text", "text": "Choose the flag of Cameroon."}],
+            "answer_widget": {
+                "type": "image_choice",
+                "images": [
+                    {"url": "https://example.com/flags/cm.png", "alt": "Cameroon", "label": "A"},
+                    {"url": "https://example.com/flags/jp.png", "alt": "Japan", "label": "B"},
+                ],
+            },
+            "canonical_answer": "A",
+            "acceptable_answers": ["A", "Cameroon"],
+            "judge_mode": "fuzzy",
+            "metadata": {"correct_payload": "A"},
+        }
+    },
+    "hotspot": {
+        "question": {
+            "prompt_blocks": [{"type": "text", "text": "Click Cameroon on the map."}],
+            "answer_widget": {
+                "type": "hotspot",
+                "image_url": "https://example.com/maps/africa.png",
+                "regions": [{"id": "cm", "label": "Cameroon"}],
+            },
+            "canonical_answer": "cm",
+            "acceptable_answers": ["cm", "Cameroon"],
+            "judge_mode": "fuzzy",
+            "metadata": {"correct_payload": "cm"},
+        }
+    },
+}
+
 
 async def generate_quiz_document(prompt: str, source_text: str = "") -> dict:
     provider = _resolve_provider()
@@ -212,12 +383,17 @@ def _user_prompt(prompt: str, source_text: str) -> dict:
     return {
         "request": prompt,
         "source_text": source_text,
+        "format_examples": FORMAT_EXAMPLES,
         "requirements": [
             "Create a static quiz with at least one playable round. Respect the requested format; list_race-only quizzes are allowed when requested.",
             "Set category to one of science, tv, sports, geography, history, general. New generated quizzes should remain status=draft until the user marks them ready.",
             "Use prompt_blocks and answer_widget on every question.",
             "Support non-text play when requested: image prompts, table prompts, math blocks, source excerpts, list_race rounds, image_choice, ordering, matching, and hotspot widgets.",
-            "For flag/image sprint quizzes, prefer image prompt blocks and text_input answers. If reliable image URLs are not provided, make the image asset requirement explicit in alt/caption/metadata rather than pretending the quiz is pure text.",
+            "Prefer currently playable answer flows unless the user explicitly requests an experimental format: text_input, multiple_choice, image prompt plus text_input, and list_race.",
+            "For flag/image sprint quizzes, create sync_open rounds with one image prompt block per question and a text_input answer. Do not use list_race for flag_sprint unless explicitly requested.",
+            "When source_text contains HTML, rows, or snippets with country names and flag image URLs, extract country-image pairs and preserve those image URLs exactly in prompt_blocks[].url.",
+            "For flag/image identification questions, do not reveal the answer in visible prompt text or captions. Use alt text for accessibility only.",
+            "If reliable image URLs are not provided, make the image asset requirement explicit in alt/caption/metadata rather than pretending the quiz is pure text.",
             "For fuzzy text_input questions, include non-empty canonical_answer and acceptable_answers.",
             "If a text_input answer cannot be enumerated, set judge_mode to llm and provide a concise canonical_answer/rubric.",
             "For multiple_choice widgets, use choices as an array of strings and set canonical_answer to the exact correct choice text.",

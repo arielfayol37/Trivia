@@ -69,17 +69,24 @@ class GenerateQuizView(APIView):
     def post(self, request):
         serializer = GenerateQuizRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        source_text = serializer.validated_data.get("source_text", "")
 
         try:
             document = async_to_sync(generate_quiz_document)(
                 serializer.validated_data["prompt"],
-                serializer.validated_data.get("source_text", ""),
+                source_text,
             )
         except LLMGenerationError as exc:
             return Response(
                 {"detail": f"LLM generation failed: {exc}"},
                 status=status.HTTP_502_BAD_GATEWAY,
             )
+
+        if source_text.strip() and not document.get("source_material"):
+            document["source_material"] = {
+                "kind": "text",
+                "content": source_text,
+            }
 
         try:
             quiz = create_quiz_from_document(

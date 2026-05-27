@@ -1,5 +1,8 @@
+from unittest.mock import AsyncMock, patch
+
 from django.test import Client, TestCase, override_settings
 
+from apps.authoring.llm import _user_prompt
 from apps.authoring.ops import (
     AuthoringContext,
     AuthoringError,
@@ -36,6 +39,61 @@ class AuthoringSmokeTests(TestCase):
         payload = response.json()
         self.assertEqual(payload["status"], QuizStatus.DRAFT)
         self.assertEqual(payload["rounds"][0]["questions"][0]["prompt_blocks"][0]["type"], "text")
+
+    def test_generate_endpoint_keeps_source_text_when_model_omits_source_material(self):
+        document = {
+            "title": "Flag Quiz",
+            "category": "geography",
+            "topic": "flags",
+            "rounds": [
+                {
+                    "type": "sync_open",
+                    "questions": [
+                        {
+                            "prompt_blocks": [
+                                {
+                                    "type": "image",
+                                    "url": "https://example.com/flags/cm.png",
+                                    "alt": "Flag",
+                                }
+                            ],
+                            "answer_widget": {"type": "text_input"},
+                            "canonical_answer": "Cameroon",
+                            "acceptable_answers": ["Cameroon"],
+                            "judge_mode": "fuzzy",
+                        }
+                    ],
+                }
+            ],
+        }
+
+        with patch(
+            "apps.authoring.views.generate_quiz_document",
+            new=AsyncMock(return_value=document),
+        ):
+            response = Client().post(
+                "/api/authoring/generate/",
+                data={
+                    "prompt": "make a flag sprint",
+                    "source_text": '<img src="https://example.com/flags/cm.png"> Cameroon',
+                },
+                content_type="application/json",
+            )
+
+        self.assertEqual(response.status_code, 201)
+        payload = response.json()
+        self.assertEqual(payload["source_material"]["kind"], "text")
+        self.assertIn("Cameroon", payload["source_material"]["content"])
+
+    def test_authoring_prompt_includes_flag_sprint_image_example(self):
+        payload = _user_prompt("Create a flag sprint from these rows", "Cameroon, https://example.com/flags/cm.png")
+        flag_example = payload["format_examples"]["flag_sprint"]["round"]
+        question = flag_example["questions"][0]
+
+        self.assertEqual(flag_example["type"], "sync_open")
+        self.assertEqual(question["prompt_blocks"][0]["type"], "image")
+        self.assertEqual(question["answer_widget"]["type"], "text_input")
+        self.assertIn("Do not use list_race for flag_sprint", " ".join(payload["requirements"]))
 
     def test_image_prompt_blocks_are_preserved(self):
         document = {
