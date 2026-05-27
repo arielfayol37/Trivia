@@ -84,8 +84,9 @@ Implemented:
   - Minimal list-race live runner.
   - First playable meta-strategy runner: players see a pre-question hint, lock a wager
     from the round's configured range, then the question is revealed and correct answers
-    score the wagered points. Missing wagers default to the configured minimum/default
-    when the betting timer expires.
+    score the wagered points. Each wager value acts like a single-use point card within
+    that meta-strategy round; missing wagers default to the configured/default next
+    available value when the betting timer expires.
   - `/ws/session/<session_id>/` broadcasts fresh session snapshots after join, ready,
     start, wager, answer, advance, and finish mutations.
   - Frontend listens over WebSocket and keeps a slower REST snapshot poll as a fallback.
@@ -520,6 +521,7 @@ prompt-block and answer-widget rendering layer introduced in M1.
    - Two-phase state: `betting` → `question`.
    - `betting`: server reveals `metadata.category_hint`; each player submits a wager
      within `bet_window_s`. Default wager on timeout = `default_bet`/`min_bet`.
+   - Wager values are single-use within a meta-strategy round.
    - `question`: prompt is revealed; each player submits an answer within
      `answer_timeout_s`. Existing fuzzy/LLM judging applies.
    - Score: `wager × correctness`.

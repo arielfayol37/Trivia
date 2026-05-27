@@ -685,6 +685,171 @@ class SessionApiTests(TestCase):
         self.assertEqual(answer_response.status_code, 200)
         self.assertEqual(answer_response.json()["state"]["scores"][player_id], 2.0)
 
+    def test_meta_strategy_wagers_are_single_use_within_round(self):
+        meta_quiz = create_quiz_from_document(
+            {
+                "title": "Strategic Set",
+                "description": "No repeated wager cards.",
+                "topic": "strategy",
+                "difficulty": "medium",
+                "rounds": [
+                    {
+                        "type": "meta_strategy",
+                        "order": 1,
+                        "config": {
+                            "min_bet": 1,
+                            "max_bet": 3,
+                            "default_bet": 1,
+                            "bet_window_s": 10,
+                            "answer_timeout_s": 20,
+                        },
+                        "questions": [
+                            {
+                                "order": 1,
+                                "prompt_blocks": [{"type": "text", "text": "First answer?"}],
+                                "answer_widget": {"type": "text_input"},
+                                "canonical_answer": "alpha",
+                                "acceptable_answers": ["alpha"],
+                                "judge_mode": "fuzzy",
+                                "metadata": {"category_hint": "First clue"},
+                            },
+                            {
+                                "order": 2,
+                                "prompt_blocks": [{"type": "text", "text": "Second answer?"}],
+                                "answer_widget": {"type": "text_input"},
+                                "canonical_answer": "beta",
+                                "acceptable_answers": ["beta"],
+                                "judge_mode": "fuzzy",
+                                "metadata": {"category_hint": "Second clue"},
+                            },
+                        ],
+                    }
+                ],
+            },
+            AuthoringContext(),
+        )
+        meta_quiz.status = QuizStatus.READY
+        meta_quiz.save(update_fields=["status"])
+        create_response = self.client.post(
+            "/api/sessions/",
+            data={"quiz_id": str(meta_quiz.id), "display_name": "Ariel"},
+            content_type="application/json",
+        )
+        session_id = create_response.json()["session"]["id"]
+        player_id = create_response.json()["player_id"]
+        self.client.post(f"/api/sessions/{session_id}/start/")
+        self.client.post(
+            f"/api/sessions/{session_id}/players/{player_id}/wager/",
+            data={"points": 2},
+            content_type="application/json",
+        )
+        session = _session_queryset().get(pk=session_id)
+        _auto_advance_session(session_id, _state_advance_token(session.state), "all_wagered")
+        self.client.post(
+            f"/api/sessions/{session_id}/players/{player_id}/answer/",
+            data={"submitted_text": "alpha"},
+            content_type="application/json",
+        )
+        next_response = self.client.post(f"/api/sessions/{session_id}/next/")
+
+        self.assertEqual(next_response.status_code, 200)
+        self.assertEqual(next_response.json()["state"]["phase"], "betting")
+        self.assertEqual(next_response.json()["state"]["meta_strategy"]["current"]["used_wagers"][player_id], [2])
+
+        repeated_wager = self.client.post(
+            f"/api/sessions/{session_id}/players/{player_id}/wager/",
+            data={"points": 2},
+            content_type="application/json",
+        )
+        self.assertEqual(repeated_wager.status_code, 400)
+
+        accepted_wager = self.client.post(
+            f"/api/sessions/{session_id}/players/{player_id}/wager/",
+            data={"points": 3},
+            content_type="application/json",
+        )
+        self.assertEqual(accepted_wager.status_code, 200)
+
+    def test_meta_strategy_default_wager_skips_used_points(self):
+        meta_quiz = create_quiz_from_document(
+            {
+                "title": "Strategic Defaults",
+                "description": "Default card advances.",
+                "topic": "strategy",
+                "difficulty": "medium",
+                "rounds": [
+                    {
+                        "type": "meta_strategy",
+                        "order": 1,
+                        "config": {
+                            "min_bet": 1,
+                            "max_bet": 3,
+                            "default_bet": 1,
+                            "bet_window_s": 1,
+                            "answer_timeout_s": 20,
+                        },
+                        "questions": [
+                            {
+                                "order": 1,
+                                "prompt_blocks": [{"type": "text", "text": "First answer?"}],
+                                "answer_widget": {"type": "text_input"},
+                                "canonical_answer": "alpha",
+                                "acceptable_answers": ["alpha"],
+                                "judge_mode": "fuzzy",
+                                "metadata": {"category_hint": "First clue"},
+                            },
+                            {
+                                "order": 2,
+                                "prompt_blocks": [{"type": "text", "text": "Second answer?"}],
+                                "answer_widget": {"type": "text_input"},
+                                "canonical_answer": "beta",
+                                "acceptable_answers": ["beta"],
+                                "judge_mode": "fuzzy",
+                                "metadata": {"category_hint": "Second clue"},
+                            },
+                        ],
+                    }
+                ],
+            },
+            AuthoringContext(),
+        )
+        meta_quiz.status = QuizStatus.READY
+        meta_quiz.save(update_fields=["status"])
+        create_response = self.client.post(
+            "/api/sessions/",
+            data={"quiz_id": str(meta_quiz.id), "display_name": "Ariel"},
+            content_type="application/json",
+        )
+        session_id = create_response.json()["session"]["id"]
+        player_id = create_response.json()["player_id"]
+        self.client.post(f"/api/sessions/{session_id}/start/")
+        self.client.post(
+            f"/api/sessions/{session_id}/players/{player_id}/wager/",
+            data={"points": 1},
+            content_type="application/json",
+        )
+        session = _session_queryset().get(pk=session_id)
+        _auto_advance_session(session_id, _state_advance_token(session.state), "all_wagered")
+        self.client.post(
+            f"/api/sessions/{session_id}/players/{player_id}/answer/",
+            data={"submitted_text": "alpha"},
+            content_type="application/json",
+        )
+        self.client.post(f"/api/sessions/{session_id}/next/")
+        session = _session_queryset().get(pk=session_id)
+        state = session.state
+        state["question_started_at"] = (timezone.now() - timedelta(seconds=5)).isoformat()
+        session.state = state
+        session.save(update_fields=["state"])
+
+        _auto_advance_session(session_id, _state_advance_token(session.state), "deadline")
+
+        payload = self.client.get(f"/api/sessions/{session_id}/").json()
+        question_id = payload["state"]["question_id"]
+        defaulted_wager = payload["state"]["meta_strategy"]["bets"][question_id][player_id]
+        self.assertEqual(defaulted_wager["points"], 2)
+        self.assertTrue(defaulted_wager["defaulted"])
+
 
 class SessionRealtimeTests(TransactionTestCase):
     def setUp(self):

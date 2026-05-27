@@ -791,6 +791,12 @@ def _meta_strategy_betting_state(
         "default_bet": config["default_bet"],
         "bet_window_s": config["bet_window_s"],
         "answer_timeout_s": config["answer_timeout_s"],
+        "used_wagers": _meta_strategy_used_wagers_by_player(
+            session,
+            previous_state,
+            question.round,
+            exclude_question=question,
+        ),
     }
 
     return {
@@ -843,6 +849,12 @@ def _meta_strategy_answer_state(
         "bet_window_s": config["bet_window_s"],
         "answer_timeout_s": config["answer_timeout_s"],
         "revealed_at": timezone.now().isoformat(),
+        "used_wagers": _meta_strategy_used_wagers_by_player(
+            session,
+            state,
+            question.round,
+            exclude_question=question,
+        ),
     }
     state["meta_strategy"] = meta_strategy
     return state
@@ -867,10 +879,30 @@ def _place_meta_strategy_wager(session: Session, player: SessionPlayer, points: 
     state = session.state or {}
     meta_strategy = _meta_strategy_state(state)
     question_bets = meta_strategy.setdefault("bets", {}).setdefault(str(question.id), {})
+    player_key = str(player.id)
+    if (question_bets.get(player_key) or {}).get("points") is not None:
+        return "Wager is already locked for this question"
+    used_wagers = _meta_strategy_used_wagers_for_player(
+        state,
+        question.round,
+        player,
+        exclude_question=question,
+    )
+    if points in used_wagers:
+        return f"{points} points has already been used in this round"
+
     question_bets[str(player.id)] = {
         "points": points,
         "submitted_at": timezone.now().isoformat(),
     }
+    current = meta_strategy.get("current") if isinstance(meta_strategy.get("current"), dict) else {}
+    current["used_wagers"] = _meta_strategy_used_wagers_by_player(
+        session,
+        state,
+        question.round,
+        exclude_question=question,
+    )
+    meta_strategy["current"] = current
     state["meta_strategy"] = meta_strategy
     session.state = state
     session.save(update_fields=["state"])
@@ -883,10 +915,22 @@ def _apply_default_meta_strategy_wagers(session: Session, question: Question) ->
     meta_strategy = _meta_strategy_state(state)
     question_bets = meta_strategy.setdefault("bets", {}).setdefault(str(question.id), {})
     now = timezone.now().isoformat()
+    players_by_id = {str(player.id): player for player in session.players.all()}
     for player_id in _active_player_ids(session):
         if (question_bets.get(player_id) or {}).get("points") is None:
+            player = players_by_id.get(player_id)
+            used_wagers = (
+                _meta_strategy_used_wagers_for_player(
+                    state,
+                    question.round,
+                    player,
+                    exclude_question=question,
+                )
+                if player
+                else set()
+            )
             question_bets[player_id] = {
-                "points": config["default_bet"],
+                "points": _default_meta_strategy_wager(config, used_wagers),
                 "submitted_at": now,
                 "defaulted": True,
             }
@@ -935,6 +979,81 @@ def _meta_strategy_question_bets(state: dict, question: Question) -> dict:
         return {}
     question_bets = bets.get(str(question.id))
     return question_bets if isinstance(question_bets, dict) else {}
+
+
+def _meta_strategy_used_wagers_for_player(
+    state: dict,
+    round_obj: Round,
+    player: SessionPlayer,
+    *,
+    exclude_question: Question | None = None,
+) -> set[int]:
+    player_key = str(player.id)
+    question_ids = {str(question.id) for question in round_obj.questions.all()}
+    if exclude_question:
+        question_ids.discard(str(exclude_question.id))
+
+    used: set[int] = set()
+    bets = _meta_strategy_state(state).get("bets")
+    if not isinstance(bets, dict):
+        return used
+
+    for question_id, question_bets in bets.items():
+        if question_id not in question_ids or not isinstance(question_bets, dict):
+            continue
+        wager = question_bets.get(player_key)
+        if not isinstance(wager, dict):
+            continue
+        points = wager.get("points")
+        if isinstance(points, int):
+            used.add(points)
+        elif isinstance(points, float) and points.is_integer():
+            used.add(int(points))
+
+    return used
+
+
+def _meta_strategy_used_wagers_by_player(
+    session: Session,
+    state: dict,
+    round_obj: Round,
+    *,
+    exclude_question: Question | None = None,
+) -> dict[str, list[int]]:
+    used_by_player: dict[str, list[int]] = {player_id: [] for player_id in _active_player_ids(session)}
+    bets = _meta_strategy_state(state).get("bets")
+    if not isinstance(bets, dict):
+        return used_by_player
+
+    question_ids = {str(question.id) for question in round_obj.questions.all()}
+    if exclude_question:
+        question_ids.discard(str(exclude_question.id))
+
+    for question_id, question_bets in bets.items():
+        if question_id not in question_ids or not isinstance(question_bets, dict):
+            continue
+        for player_id, wager in question_bets.items():
+            if not isinstance(wager, dict):
+                continue
+            points = wager.get("points")
+            if isinstance(points, int):
+                used_by_player.setdefault(str(player_id), []).append(points)
+            elif isinstance(points, float) and points.is_integer():
+                used_by_player.setdefault(str(player_id), []).append(int(points))
+
+    return {
+        player_id: sorted(set(points))
+        for player_id, points in used_by_player.items()
+    }
+
+
+def _default_meta_strategy_wager(config: dict[str, int], used_wagers: set[int]) -> int:
+    if config["default_bet"] not in used_wagers:
+        return config["default_bet"]
+    for points in range(config["min_bet"], config["max_bet"] + 1):
+        if points not in used_wagers:
+            return points
+    return config["default_bet"]
 
 
 def _wager_for_player(state: dict, question: Question, player: SessionPlayer) -> float | None:

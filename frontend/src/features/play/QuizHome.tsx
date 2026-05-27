@@ -1451,20 +1451,26 @@ function BettingRoom({
   const hint = String(current.hint ?? "Mystery question");
   const localBet = localPlayerId ? asRecord(bets[localPlayerId]) : {};
   const lockedPoints = typeof localBet.points === "number" ? localBet.points : null;
-  const [selectedBet, setSelectedBet] = useState(defaultBet);
+  const usedWagers = asRecord(current.used_wagers);
+  const localUsedWagers = new Set(
+    (localPlayerId && Array.isArray(usedWagers[localPlayerId]) ? usedWagers[localPlayerId] : [])
+      .filter((points): points is number => typeof points === "number"),
+  );
   const wagerOptions = Array.from(
     { length: Math.max(0, maxBet - minBet + 1) },
     (_, index) => minBet + index,
   ).slice(0, 20);
+  const firstAvailableWager = wagerOptions.find((points) => !localUsedWagers.has(points)) ?? defaultBet;
+  const [selectedBet, setSelectedBet] = useState(firstAvailableWager);
   const lockedPlayers = session.players.filter((player) => {
     const wager = asRecord(bets[player.id]);
     return wager.points !== undefined && wager.points !== null;
   });
 
   useEffect(() => {
-    setSelectedBet(lockedPoints ?? defaultBet);
+    setSelectedBet(lockedPoints ?? firstAvailableWager);
     window.scrollTo({ left: 0, top: 0, behavior: "auto" });
-  }, [defaultBet, lockedPoints, questionId]);
+  }, [firstAvailableWager, lockedPoints, questionId]);
 
   if (!question) {
     return (
@@ -1519,21 +1525,39 @@ function BettingRoom({
                       className={`h-12 rounded-md border text-lg font-black tabular-nums transition ${
                         selectedBet === points
                           ? "border-stagegold bg-stagegold text-midnight"
+                          : localUsedWagers.has(points)
+                            ? "border-white/10 bg-white/10 text-white/35"
                           : "border-white/15 bg-white text-midnight hover:border-stagegold hover:bg-pale"
                       } disabled:cursor-not-allowed disabled:opacity-50`}
-                      disabled={isUpdatingSession || lockedPoints !== null || !localPlayerId}
+                      disabled={
+                        isUpdatingSession ||
+                        lockedPoints !== null ||
+                        !localPlayerId ||
+                        localUsedWagers.has(points)
+                      }
                       key={points}
                       onClick={() => setSelectedBet(points)}
                       type="button"
+                      title={localUsedWagers.has(points) ? "Already used in this round" : undefined}
                     >
                       {points}
                     </button>
                   ))}
                 </div>
+                {localUsedWagers.size ? (
+                  <div className="mt-2 text-xs font-semibold text-white/55">
+                    Already used this round: {[...localUsedWagers].sort((a, b) => a - b).join(", ")}
+                  </div>
+                ) : null}
 
                 <Button
                   className="mt-3 w-full uppercase tracking-wider"
-                  disabled={isUpdatingSession || lockedPoints !== null || !localPlayerId}
+                  disabled={
+                    isUpdatingSession ||
+                    lockedPoints !== null ||
+                    !localPlayerId ||
+                    localUsedWagers.has(selectedBet)
+                  }
                   onClick={() => onPlaceWager(selectedBet)}
                   type="button"
                   variant="stage"
@@ -1804,13 +1828,22 @@ function PlayingRoom({
   const [introShownForRoundId, setIntroShownForRoundId] = useState<string | null>(null);
   const [introVisible, setIntroVisible] = useState(false);
   const [nowMs, setNowMs] = useState(Date.now());
+  const metaStrategy = asRecord(session.state.meta_strategy);
+  const metaCurrent = asRecord(metaStrategy.current);
+  const isMetaQuestionReveal =
+    round?.type === "meta_strategy" && typeof metaCurrent.revealed_at === "string";
 
   useEffect(() => {
+    if (round && round.id !== introShownForRoundId && isMetaQuestionReveal) {
+      setIntroShownForRoundId(round.id);
+      setIntroVisible(false);
+      return;
+    }
     if (round && round.id !== introShownForRoundId) {
       setIntroShownForRoundId(round.id);
       setIntroVisible(true);
     }
-  }, [round?.id, introShownForRoundId]);
+  }, [round?.id, introShownForRoundId, isMetaQuestionReveal]);
 
   function handleIntroComplete() {
     setIntroVisible(false);
