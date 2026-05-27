@@ -1,0 +1,66 @@
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-trivia}
+      POSTGRES_USER: ${POSTGRES_USER:-trivia}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-trivia}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-trivia}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+
+  django:
+    build:
+      context: ./backend
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: postgres
+      REDIS_URL: redis://redis:6379/0
+      CHANNEL_LAYER_BACKEND: redis
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    command: ["daphne", "-b", "0.0.0.0", "-p", "8000", "trivia.asgi:application"]
+    volumes:
+      - ./backend:/app
+
+  caddy:
+    image: caddy:2-alpine
+    depends_on:
+      - django
+    ports:
+      - "8080:80"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./frontend/dist:/srv/frontend:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --config /etc/cloudflared/config.yml run
+    depends_on:
+      - caddy
+    volumes:
+      - ./cloudflared/config.yml:/etc/cloudflared/config.yml:ro
+    profiles:
+      - tunnel
+
+volumes:
+  postgres_data:
+  redis_data:
+  caddy_data:
+  caddy_config:

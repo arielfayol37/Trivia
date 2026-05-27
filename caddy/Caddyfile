@@ -1,0 +1,22 @@
+:80 {
+  root * /srv/frontend
+  encode gzip
+
+  handle /api/* {
+    reverse_proxy django:8000
+  }
+
+  handle /accounts/* {
+    reverse_proxy django:8000
+  }
+
+  handle /ws/* {
+    reverse_proxy django:8000
+  }
+
+  handle {
+    try_files {path} /index.html
+    file_server
+  }
+}
+
