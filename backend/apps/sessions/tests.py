@@ -439,6 +439,19 @@ class SessionRealtimeTests(TransactionTestCase):
 
         async_to_sync(self._assert_socket_receives_join_update)(session_id)
 
+    def test_session_websocket_marks_player_presence(self):
+        create_response = self.client.post(
+            "/api/sessions/",
+            data={"quiz_id": str(self.quiz.id), "display_name": "Ariel"},
+            content_type="application/json",
+        )
+        payload = create_response.json()
+
+        async_to_sync(self._assert_socket_marks_player_presence)(
+            payload["session"]["id"],
+            payload["player_id"],
+        )
+
     async def _assert_socket_receives_join_update(self, session_id: str):
         communicator = WebsocketCommunicator(application, f"/ws/session/{session_id}/")
         connected, _subprotocol = await communicator.connect()
@@ -458,9 +471,34 @@ class SessionRealtimeTests(TransactionTestCase):
         self.assertEqual(names, {"Ariel", "Friend"})
         await communicator.disconnect()
 
+    async def _assert_socket_marks_player_presence(self, session_id: str, player_id: str):
+        communicator = WebsocketCommunicator(
+            application,
+            f"/ws/session/{session_id}/?player_id={player_id}",
+        )
+        connected, _subprotocol = await communicator.connect()
+        self.assertTrue(connected)
+
+        snapshot = await communicator.receive_json_from(timeout=5)
+        presence = snapshot["session"]["state"]["presence"][player_id]
+        self.assertTrue(presence["online"])
+        self.assertEqual(presence["connection_count"], 1)
+
+        await communicator.disconnect()
+
+        disconnected_presence = await database_sync_to_async(self._player_presence)(
+            session_id,
+            player_id,
+        )
+        self.assertFalse(disconnected_presence["online"])
+        self.assertEqual(disconnected_presence["connection_count"], 0)
+
     def _join_session(self, session_id: str):
         return self.client.post(
             "/api/sessions/join/",
             data={"session_id": session_id, "display_name": "Friend"},
             content_type="application/json",
         )
+
+    def _player_presence(self, session_id: str, player_id: str):
+        return self.client.get(f"/api/sessions/{session_id}/").json()["state"]["presence"][player_id]

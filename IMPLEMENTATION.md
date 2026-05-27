@@ -63,6 +63,9 @@ Implemented:
   - Post-game actions: play again, browse same-topic quizzes, or return home.
   - Room chat persists in session state and is available in lobby, play, and finished
     views.
+  - Player-aware WebSocket presence marks connected players online/offline.
+  - The frontend stores the local session/player in local storage and restores the same
+    player on refresh when the invite code matches.
   - Minimal list-race live runner.
   - `/ws/session/<session_id>/` broadcasts fresh session snapshots after join, ready,
     start, answer, advance, and finish mutations.
@@ -89,15 +92,16 @@ Verified locally:
 - `npm run build`
 - Browser QA for authoring lifecycle, Play Hub ready-only catalog, selected draft
   blueprint, live question layout, WebSocket lobby updates, and backend-owned question
-  auto-advance/countdown, plus post-game action visibility.
+  auto-advance/countdown, post-game action visibility, and refresh reconnect.
 
 Still not done:
 
 - Fully server-authoritative multiplayer. WebSockets now broadcast snapshots and the
   backend owns basic auto-advance, but REST still performs player actions and the
   scheduler is in-process rather than a durable Redis/Celery-style job runner.
-- Proper realtime presence, disconnect/reconnect, host migration, and late-join spectator
-  mode. Current player-response reveal is UI-gated, not security-redacted per player.
+- Robust disconnect/reconnect, host migration, and late-join spectator mode. Current
+  presence is socket-count based and current player-response reveal is UI-gated, not
+  security-redacted per player.
 - Full live support for all answer widgets and round types (`list_input`, `ordering`,
   `matching`, `image_choice`, `hotspot`, full `meta_strategy`, full `buzz_in`).
 - Post-game review/replay beyond the current final scoreboard and action buttons.
@@ -110,8 +114,8 @@ Still not done:
 
 Immediate next priorities:
 
-1. **Presence/disconnect flow**: connection tracking, leave/rejoin behavior, host
-   migration, and late-join spectator mode.
+1. **Cross-device validation**: run the app on the LAN, test phone + laptop joining the
+   same lobby, and tighten any mobile layout or socket issues.
 2. **Play mechanics polish**: improve locked
    answer states, animate score changes, and make host/non-host controls unambiguous.
 3. **Playable widget expansion**: finish live behavior for `list_input`, `ordering`,
@@ -364,6 +368,7 @@ for every question.
 - WebSocket route `/ws/session/<session_id>/` with initial snapshot and mutation
   broadcasts.
 - Frontend WebSocket listener with slower REST snapshot fallback.
+- Player-aware socket presence and refresh restore for the local player.
 - Backend-owned auto-advance on all-submit and timeout.
 - REST-backed session state machine: lobby → playing → finished.
 - Sequential authored-question play; no default random 10-question sampling.

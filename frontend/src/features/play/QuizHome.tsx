@@ -100,6 +100,13 @@ const quizCategoryFilters: Array<{ id: QuizCategoryId; label: string }> = [
 ];
 
 const playerColors = ["#3564ff", "#f05d5e", "#72e0b3", "#e8c87a", "#8a5cf6", "#f47b20", "#e83a8e", "#72e0b3"];
+const localSessionStorageKey = "trivia.localSession.v1";
+
+type StoredLocalSession = {
+  invite_code: string;
+  player_id: string;
+  session_id: string;
+};
 
 function initialJoinCode() {
   return new URLSearchParams(window.location.search).get("join") ?? "";
@@ -111,6 +118,53 @@ function inviteUrl(inviteCode: string) {
 
 function updateJoinUrl(inviteCode: string) {
   window.history.replaceState(null, "", `?join=${encodeURIComponent(inviteCode)}`);
+}
+
+function saveLocalSession(session: LiveSession, playerId: string) {
+  try {
+    window.localStorage.setItem(
+      localSessionStorageKey,
+      JSON.stringify({
+        invite_code: session.invite_code,
+        player_id: playerId,
+        session_id: session.id,
+      } satisfies StoredLocalSession),
+    );
+  } catch {
+    // Local storage is best-effort; losing it only disables refresh reconnect.
+  }
+}
+
+function loadLocalSession(inviteCode: string): StoredLocalSession | null {
+  if (!inviteCode) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(localSessionStorageKey) ?? "null") as Partial<StoredLocalSession> | null;
+    if (
+      parsed &&
+      parsed.invite_code === inviteCode &&
+      typeof parsed.player_id === "string" &&
+      typeof parsed.session_id === "string"
+    ) {
+      return {
+        invite_code: parsed.invite_code,
+        player_id: parsed.player_id,
+        session_id: parsed.session_id,
+      };
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function clearLocalSession() {
+  try {
+    window.localStorage.removeItem(localSessionStorageKey);
+  } catch {
+    // Nothing to clear.
+  }
 }
 
 function quizQuestionCount(quiz: Quiz) {
@@ -244,6 +298,15 @@ function submissionFor(session: LiveSession, questionId: string, playerId: strin
   return asRecord(asRecord(submissions[questionId])[playerId]);
 }
 
+function playerPresence(session: LiveSession, playerId: string) {
+  const presence = asRecord(asRecord(session.state).presence);
+  const entry = asRecord(presence[playerId]);
+  return {
+    online: entry.online === true,
+    known: Object.keys(entry).length > 0,
+  };
+}
+
 const ROUND_LABELS: Record<Quiz["rounds"][number]["type"], string> = {
   meta_strategy: "Meta-strategy",
   list_race: "List race",
@@ -281,12 +344,45 @@ export function QuizHome() {
   }, []);
 
   useEffect(() => {
+    const storedSession = loadLocalSession(initialJoinCode());
+    if (!storedSession) {
+      return;
+    }
+
+    let cancelled = false;
+    getSession(storedSession.session_id)
+      .then((session) => {
+        if (cancelled) {
+          return;
+        }
+        const restoredPlayer = session.players.find(
+          (player) => player.id === storedSession.player_id,
+        );
+        if (!restoredPlayer || session.invite_code !== storedSession.invite_code) {
+          clearLocalSession();
+          return;
+        }
+        setLiveSession(session);
+        setLocalPlayerId(storedSession.player_id);
+        setPlayerName(restoredPlayer.display_name);
+        setSelectedQuizId(session.quiz.id);
+        setJoinCode(session.invite_code);
+        updateJoinUrl(session.invite_code);
+      })
+      .catch(() => clearLocalSession());
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     if (!liveSession) {
       return;
     }
 
     let isClosed = false;
-    const socket = new WebSocket(getSessionSocketUrl(liveSession.id));
+    const socket = new WebSocket(getSessionSocketUrl(liveSession.id, localPlayerId));
     socket.addEventListener("message", (event) => {
       try {
         const payload = JSON.parse(event.data) as { session?: LiveSession };
@@ -313,7 +409,7 @@ export function QuizHome() {
       window.clearInterval(timer);
       socket.close();
     };
-  }, [liveSession?.id]);
+  }, [liveSession?.id, localPlayerId]);
 
   const baseFilteredQuizzes = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
@@ -369,6 +465,7 @@ export function QuizHome() {
         quiz_id: quizToPlay.id,
         display_name: playerName.trim() || "Host",
       });
+      saveLocalSession(response.session, response.player_id);
       setLiveSession(response.session);
       setLocalPlayerId(response.player_id);
       setSelectedQuizId(response.session.quiz.id);
@@ -390,6 +487,7 @@ export function QuizHome() {
         invite_code: joinCode.trim(),
         display_name: playerName.trim() || "Player",
       });
+      saveLocalSession(response.session, response.player_id);
       setLiveSession(response.session);
       setLocalPlayerId(response.player_id);
       setSelectedQuizId(response.session.quiz.id);
@@ -485,6 +583,7 @@ export function QuizHome() {
   }
 
   function handleBackHome() {
+    clearLocalSession();
     setLiveSession(null);
     setLocalPlayerId(null);
     setSelectedQuizId(null);
@@ -493,6 +592,7 @@ export function QuizHome() {
   }
 
   function handleFindSimilar(quiz: Quiz) {
+    clearLocalSession();
     setLiveSession(null);
     setLocalPlayerId(null);
     setSelectedQuizId(null);
@@ -1118,36 +1218,47 @@ function LobbyRoom({
           Players
         </div>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {session.players.map((player, index) => (
-            <article
-              className="relative overflow-hidden rounded-xl border border-white/10 bg-white/5 p-4 transition hover:bg-white/10"
-              key={player.id}
-            >
-              <div className="flex items-center gap-3">
-                <motion.div
-                  animate={player.is_ready ? { scale: [1, 1.08, 1] } : { scale: 1 }}
-                  className="flex h-12 w-12 items-center justify-center rounded-md font-display text-2xl text-midnight"
-                  style={{ backgroundColor: playerColor(index) }}
-                  transition={{ duration: 1.6, repeat: player.is_ready ? Infinity : 0 }}
-                >
-                  {player.display_name.slice(0, 1).toUpperCase()}
-                </motion.div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <div className="truncate font-bold text-white">{player.display_name}</div>
-                    {player.is_host ? <Crown className="h-4 w-4 text-stagegold" /> : null}
-                  </div>
-                  <div
-                    className={`mt-0.5 text-[10px] font-bold uppercase tracking-[0.3em] ${
-                      player.is_ready ? "text-aqua" : "text-white/55"
-                    }`}
+          {session.players.map((player, index) => {
+            const presence = playerPresence(session, player.id);
+            return (
+              <article
+                className="relative overflow-hidden rounded-xl border border-white/10 bg-white/5 p-4 transition hover:bg-white/10"
+                key={player.id}
+              >
+                <div className="flex items-center gap-3">
+                  <motion.div
+                    animate={player.is_ready ? { scale: [1, 1.08, 1] } : { scale: 1 }}
+                    className="flex h-12 w-12 items-center justify-center rounded-md font-display text-2xl text-midnight"
+                    style={{ backgroundColor: playerColor(index) }}
+                    transition={{ duration: 1.6, repeat: player.is_ready ? Infinity : 0 }}
                   >
-                    {player.is_ready ? "ready" : "not ready"}
+                    {player.display_name.slice(0, 1).toUpperCase()}
+                  </motion.div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <div className="truncate font-bold text-white">{player.display_name}</div>
+                      {player.is_host ? <Crown className="h-4 w-4 text-stagegold" /> : null}
+                    </div>
+                    <div
+                      className={`mt-0.5 text-[10px] font-bold uppercase tracking-[0.3em] ${
+                        player.is_ready ? "text-aqua" : "text-white/55"
+                      }`}
+                    >
+                      {player.is_ready ? "ready" : "not ready"}
+                    </div>
+                    <div className="mt-1 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.25em] text-white/45">
+                      <span
+                        className={`h-2 w-2 rounded-full ${
+                          presence.online ? "bg-aqua" : "bg-white/25"
+                        }`}
+                      />
+                      {presence.online ? "online" : presence.known ? "offline" : "connecting"}
+                    </div>
                   </div>
                 </div>
-              </div>
-            </article>
-          ))}
+              </article>
+            );
+          })}
         </div>
       </section>
     </div>
@@ -1926,21 +2037,25 @@ function Chyron({ session }: { session: LiveSession }) {
   return (
     <div className="fixed inset-x-0 bottom-0 z-20 border-t border-white/10 bg-midnight/95 px-4 py-3 backdrop-blur">
       <div className="mx-auto flex max-w-6xl items-center justify-center gap-3 overflow-x-auto">
-        {session.players.map((player, index) => (
-          <div
-            className="flex shrink-0 items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1.5"
-            key={player.id}
-          >
+        {session.players.map((player, index) => {
+          const presence = playerPresence(session, player.id);
+          return (
             <div
-              className="flex h-7 w-7 items-center justify-center rounded-full font-display text-sm text-midnight"
-              style={{ backgroundColor: playerColor(index) }}
+              className="flex shrink-0 items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1.5"
+              key={player.id}
             >
-              {player.display_name.slice(0, 1).toUpperCase()}
+              <span className={`h-2 w-2 rounded-full ${presence.online ? "bg-aqua" : "bg-white/25"}`} />
+              <div
+                className="flex h-7 w-7 items-center justify-center rounded-full font-display text-sm text-midnight"
+                style={{ backgroundColor: playerColor(index) }}
+              >
+                {player.display_name.slice(0, 1).toUpperCase()}
+              </div>
+              <div className="text-xs font-semibold text-white">{player.display_name}</div>
+              <ScoreNumber value={scoreFor(session, player.id)} />
             </div>
-            <div className="text-xs font-semibold text-white">{player.display_name}</div>
-            <ScoreNumber value={scoreFor(session, player.id)} />
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

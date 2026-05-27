@@ -31,6 +31,23 @@ When you are ready for real generation, set `LLM_PROVIDER=openai` or
 `LLM_PROVIDER=anthropic` in `.env`, then fill the matching API key and model variables.
 Do not put API keys in chat or commit them.
 
+## Same-Network Phone Testing
+
+Use your laptop's LAN IP, then run the dev servers on all interfaces:
+
+```bash
+cd backend
+DJANGO_ALLOWED_HOSTS="localhost,127.0.0.1,[::1],YOUR_LAN_IP" uv run python manage.py runserver 0.0.0.0:8000
+```
+
+```bash
+cd frontend
+npm run dev:lan
+```
+
+Open `http://YOUR_LAN_IP:5173` from the phone. If Vite picks another port, use the port
+shown in the frontend terminal.
+
 ## Verification
 
 ```bash

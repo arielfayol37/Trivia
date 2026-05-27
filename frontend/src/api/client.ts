@@ -124,9 +124,14 @@ export function getSession(sessionId: string) {
   });
 }
 
-export function getSessionSocketUrl(sessionId: string) {
+export function getSessionSocketUrl(sessionId: string, playerId?: string | null) {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${protocol}//${window.location.host}/ws/session/${encodeURIComponent(sessionId)}/`;
+  const params = new URLSearchParams();
+  if (playerId) {
+    params.set("player_id", playerId);
+  }
+  const query = params.toString();
+  return `${protocol}//${window.location.host}/ws/session/${encodeURIComponent(sessionId)}/${query ? `?${query}` : ""}`;
 }
 
 export function setSessionPlayerReady(sessionId: string, playerId: string, isReady: boolean) {
