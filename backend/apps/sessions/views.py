@@ -94,6 +94,11 @@ class SessionJoinView(APIView):
         display_name = validated["display_name"].strip()
         with transaction.atomic():
             locked_session = Session.objects.select_for_update().get(pk=session.pk)
+            if _display_name_taken(locked_session, display_name):
+                return Response(
+                    {"detail": "That name is already in this room"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             player = SessionPlayer.objects.create(
                 session=locked_session,
                 user=request.user if request.user and request.user.is_authenticated else None,
@@ -305,6 +310,10 @@ def _get_join_session(validated: dict) -> Session:
     if invite_code:
         return get_object_or_404(queryset, invite_code=invite_code)
     return get_object_or_404(queryset, pk=validated["session_id"])
+
+
+def _display_name_taken(session: Session, display_name: str) -> bool:
+    return session.players.filter(display_name__iexact=display_name).exists()
 
 
 def _playable_questions(session: Session) -> list[Question]:

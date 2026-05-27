@@ -32,7 +32,7 @@ function PromptBlockView({
   switch (block.type) {
     case "text":
       return (
-        <p className={isPlay ? "text-xl leading-8 text-midnight sm:text-2xl sm:leading-10" : "text-sm leading-6 text-midnight"}>
+        <p className={isPlay ? "text-2xl font-semibold leading-snug text-midnight sm:text-3xl lg:text-4xl" : "text-sm leading-6 text-midnight"}>
           <InlineMathText text={block.text} />
         </p>
       );

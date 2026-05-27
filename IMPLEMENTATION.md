@@ -59,6 +59,8 @@ Implemented:
   - Fuzzy judging and score updates.
   - Correct-answer reveal after submission/timeout, including each player's submitted
     text for the active question.
+  - Session joins reject duplicate display names case-insensitively, so a room cannot
+    have two indistinguishable "Player"/same-name entries.
   - Basic session finish flow.
   - Post-game actions: play again, browse same-topic quizzes, or return home.
   - Room chat persists in session state and is available in lobby, play, and finished
@@ -76,11 +78,18 @@ Implemented:
 - Play UI has a first-pass game-show/stage visual direction:
   - Player-facing Play Hub.
   - Lobby room with large invite code and player tiles.
+  - Explicit player-name entry before creating or joining a room; no silent default
+    "Player" identity.
   - Round intro slate.
   - Live question screen with timer, answer panel, verdict reveal, and bottom score
     chyron.
-  - Question prompt card now sizes to content instead of stretching into a large empty
-    white panel.
+  - In-session site chrome is hidden during active play/finished states.
+  - During play and post-game, room chat collapses into a floating tab with unread
+    count instead of taking permanent screen space.
+  - Correct answer and player submissions now reveal in a fixed compact dock above the
+    score chyron, reducing scroll on phone-sized screens.
+  - Question prompt text is larger in play mode so short prompts use the card more
+    intentionally.
 
 Verified locally:
 
@@ -381,8 +390,8 @@ for every question.
 - Minimal list-race runner.
 
 **Remaining M2 tasks**:
-1. Add socket identity and permissions: signed-in user OR a guest token tied to a
-   `SessionPlayer`.
+1. Harden socket identity and permissions: current sockets pass `player_id`; production
+   should use a signed guest token or signed-in user tied to a `SessionPlayer`.
 2. Server-authoritative hot state:
    - Current round/question.
    - Question start timestamp.
@@ -390,16 +399,18 @@ for every question.
    - Submitted/locked players.
    - Scores.
    - Connected/disconnected presence.
-   Basic current question, deadline, submitted players, and scores are in state now;
-   presence still needs real connection tracking.
+   Basic current question, deadline, submitted players, scores, and socket-count
+   presence are in state now; the remaining gap is durable storage/job coordination and
+   signed identity.
 3. Replace whole-session snapshot broadcasts with a stricter event protocol where that
    helps bandwidth/debuggability; keep REST snapshot fallback on reconnect.
 4. Lobby UX upgrades:
-   - Presence updates without polling.
+   - Presence updates without polling are in place through session snapshots.
    - Ready changes broadcast instantly.
    - Hybrid start: auto-start countdown when all players are ready, plus host "Start
      now" override.
    - Lobby chat panel.
+   - Remaining: host migration and late-join spectator handling.
 5. WS protocol message types (exhaustive list in `apps/realtime/protocol.py`):
    - `lobby.state`, `lobby.player_joined`, `lobby.player_left`, `lobby.ready_changed`,
      `lobby.chat_message`, `lobby.start_requested`
@@ -428,6 +439,7 @@ for every question.
    - Correct/wrong reveal animation.
    - Opponent score movement in the chyron.
    - Host/guest state clarity.
+   - Compact mobile play layout and reduced-scroll result reveal.
 
 **Acceptance**:
 - A quiz generated in authoring, marked `ready`, can be used directly for the

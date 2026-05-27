@@ -73,6 +73,23 @@ class SessionApiTests(TestCase):
         names = {player["display_name"] for player in payload["session"]["players"]}
         self.assertEqual(names, {"Ariel", "Friend"})
 
+    def test_join_session_rejects_duplicate_display_name(self):
+        create_response = self.client.post(
+            "/api/sessions/",
+            data={"quiz_id": str(self.quiz.id), "display_name": "Ariel"},
+            content_type="application/json",
+        )
+        invite_code = create_response.json()["session"]["invite_code"]
+
+        join_response = self.client.post(
+            "/api/sessions/join/",
+            data={"invite_code": invite_code, "display_name": "ariel"},
+            content_type="application/json",
+        )
+
+        self.assertEqual(join_response.status_code, 400)
+        self.assertEqual(join_response.json()["detail"], "That name is already in this room")
+
     def test_ready_endpoint_updates_player_state(self):
         create_response = self.client.post(
             "/api/sessions/",

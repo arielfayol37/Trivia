@@ -325,7 +325,7 @@ export function QuizHome() {
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState<QuizCategoryId>("all");
   const [difficulty, setDifficulty] = useState<DifficultyFilter>("all");
-  const [playerName, setPlayerName] = useState("Player");
+  const [playerName, setPlayerName] = useState("");
   const [joinCode, setJoinCode] = useState(initialJoinCode);
   const [liveSession, setLiveSession] = useState<LiveSession | null>(null);
   const [localPlayerId, setLocalPlayerId] = useState<string | null>(null);
@@ -457,13 +457,18 @@ export function QuizHome() {
     if (!quizToPlay) {
       return;
     }
+    const displayName = playerName.trim();
+    if (!displayName) {
+      setSessionError("Choose a player name before starting a lobby");
+      return;
+    }
 
     setIsCreatingSession(true);
     setSessionError(null);
     try {
       const response = await createSession({
         quiz_id: quizToPlay.id,
-        display_name: playerName.trim() || "Host",
+        display_name: displayName,
       });
       saveLocalSession(response.session, response.player_id);
       setLiveSession(response.session);
@@ -480,12 +485,18 @@ export function QuizHome() {
 
   async function handleJoinLobby(event: FormEvent) {
     event.preventDefault();
+    const displayName = playerName.trim();
+    if (!displayName) {
+      setSessionError("Choose a player name before joining");
+      return;
+    }
+
     setIsJoiningSession(true);
     setSessionError(null);
     try {
       const response = await joinSession({
         invite_code: joinCode.trim(),
-        display_name: playerName.trim() || "Player",
+        display_name: displayName,
       });
       saveLocalSession(response.session, response.player_id);
       setLiveSession(response.session);
@@ -603,9 +614,11 @@ export function QuizHome() {
     window.history.replaceState(null, "", "/");
   }
 
+  const isGameActive = liveSession?.status === "playing" || liveSession?.status === "finished";
+
   return (
     <main className="min-h-screen bg-midnight text-white">
-      <TopBar health={health} dark />
+      {isGameActive ? null : <TopBar health={health} dark />}
 
       {liveSession?.status === "playing" || liveSession?.status === "finished" ? (
         <GameRoom
@@ -637,8 +650,11 @@ export function QuizHome() {
           onBack={() => setSelectedQuizId(null)}
           onCreateLobby={() => handleCreateLobby(selectedQuiz)}
           onOpenQuiz={setSelectedQuizId}
+          onPlayerNameChange={setPlayerName}
+          playerName={playerName}
           quiz={selectedQuiz}
           relatedQuizzes={relatedQuizzes}
+          sessionError={sessionError}
         />
       ) : (
         <PlayLobbyFinder
@@ -817,18 +833,29 @@ function PlayLobbyFinder({
               Join a room
             </div>
             <div className="mt-4 grid gap-3">
-              <Input
-                className="h-12 border-white/15 bg-white text-midnight"
-                placeholder="Your name"
-                value={playerName}
-                onChange={(event) => onPlayerNameChange(event.target.value)}
-              />
-              <Input
-                className="h-16 border-white/15 bg-white text-center font-display text-3xl uppercase tracking-[0.3em] text-midnight"
-                placeholder="CODE"
-                value={joinCode}
-                onChange={(event) => onJoinCodeChange(event.target.value.toUpperCase())}
-              />
+              <label className="block">
+                <span className="mb-2 block text-[10px] font-bold uppercase tracking-[0.35em] text-white/55">
+                  Player name
+                </span>
+                <Input
+                  className="h-12 border-white/15 bg-white text-midnight"
+                  autoComplete="nickname"
+                  placeholder="Your name"
+                  value={playerName}
+                  onChange={(event) => onPlayerNameChange(event.target.value)}
+                />
+              </label>
+              <label className="block">
+                <span className="mb-2 block text-[10px] font-bold uppercase tracking-[0.35em] text-white/55">
+                  Invite code
+                </span>
+                <Input
+                  className="h-16 border-white/15 bg-white text-center font-display text-3xl uppercase tracking-[0.3em] text-midnight"
+                  placeholder="CODE"
+                  value={joinCode}
+                  onChange={(event) => onJoinCodeChange(event.target.value.toUpperCase())}
+                />
+              </label>
               <Button
                 className="h-12 uppercase tracking-wider"
                 disabled={isJoiningSession || !joinCode.trim() || !playerName.trim()}
@@ -961,15 +988,21 @@ function QuizDetail({
   onBack,
   onCreateLobby,
   onOpenQuiz,
+  onPlayerNameChange,
+  playerName,
   quiz,
   relatedQuizzes,
+  sessionError,
 }: {
   isCreatingSession: boolean;
   onBack: () => void;
   onCreateLobby: () => void;
   onOpenQuiz: (quizId: string) => void;
+  onPlayerNameChange: (name: string) => void;
+  playerName: string;
   quiz: Quiz;
   relatedQuizzes: Quiz[];
+  sessionError: string | null;
 }) {
   return (
     <div className="mx-auto max-w-5xl px-5 py-6">
@@ -999,10 +1032,22 @@ function QuizDetail({
             <Stat label="Questions" value={quizQuestionCount(quiz)} />
             <Stat label="Mode" value="Multiplayer" />
           </div>
-          <div className="mt-7 flex flex-wrap gap-3">
+          <div className="mt-7 grid max-w-xl gap-3 sm:grid-cols-[1fr_auto]">
+            <label className="block">
+              <span className="mb-2 block text-[10px] font-bold uppercase tracking-[0.35em] text-white/55">
+                Player name
+              </span>
+              <Input
+                className="h-14 border-white/15 bg-white text-base text-midnight"
+                autoComplete="nickname"
+                onChange={(event) => onPlayerNameChange(event.target.value)}
+                placeholder="Your name"
+                value={playerName}
+              />
+            </label>
             <Button
-              className="h-14 px-7 uppercase tracking-wider"
-              disabled={isCreatingSession}
+              className="self-end h-14 px-7 uppercase tracking-wider"
+              disabled={isCreatingSession || !playerName.trim()}
               onClick={onCreateLobby}
               type="button"
               variant="stage"
@@ -1010,6 +1055,11 @@ function QuizDetail({
               {isCreatingSession ? <Loader2 className="h-5 w-5 animate-spin" /> : <Radio className="h-5 w-5" />}
               Start the show
             </Button>
+          </div>
+          {sessionError ? (
+            <div className="mt-3 text-sm font-semibold text-inviteError">{sessionError}</div>
+          ) : null}
+          <div className="mt-3 flex flex-wrap gap-3">
             <a
               className="inline-flex h-14 items-center justify-center rounded-md border border-white/20 px-5 text-sm font-bold uppercase tracking-wider text-white transition hover:bg-white/10"
               href="/author"
@@ -1467,18 +1517,20 @@ function ListRaceRoom({
               >
                 End race
               </Button>
-              <RoomChatPanel
-                disabled={!localPlayerId}
-                localPlayerId={localPlayerId}
-                onSendChat={onSendChat}
-                session={session}
-                tone="dark"
-              />
             </aside>
           </div>
         </section>
       </div>
 
+      <RoomChatPanel
+        disabled={!localPlayerId}
+        dock="chyron"
+        localPlayerId={localPlayerId}
+        mode="drawer"
+        onSendChat={onSendChat}
+        session={session}
+        tone="dark"
+      />
       <Chyron session={session} />
     </>
   );
@@ -1569,7 +1621,7 @@ function PlayingRoom({
         ) : null}
       </AnimatePresence>
 
-      <div className="mx-auto max-w-6xl px-5 py-6 pb-32">
+      <div className={`mx-auto max-w-6xl px-5 py-5 ${shouldRevealAnswers ? "pb-64" : "pb-32"}`}>
         <div className="flex items-center justify-between gap-3 text-[10px] font-bold uppercase tracking-[0.5em] text-stagegold">
           <span>
             Round {roundNumber} · {round ? roundLabel(round.type) : ""}
@@ -1619,14 +1671,6 @@ function PlayingRoom({
                   />
                 ) : null}
 
-                {shouldRevealAnswers ? (
-                  <AnswerRevealPanel
-                    question={question}
-                    session={session}
-                    showWaiting={!questionClosed}
-                  />
-                ) : null}
-
                 {sessionError ? (
                   <div className="mt-3 text-sm font-semibold text-inviteError">{sessionError}</div>
                 ) : null}
@@ -1649,18 +1693,28 @@ function PlayingRoom({
               {!isHost ? (
                 <div className="text-xs text-white/55">Questions advance automatically.</div>
               ) : null}
-              <RoomChatPanel
-                disabled={!localPlayerId}
-                localPlayerId={localPlayerId}
-                onSendChat={onSendChat}
-                session={session}
-                tone="dark"
-              />
             </aside>
           </div>
         </section>
       </div>
 
+      {shouldRevealAnswers ? (
+        <AnswerRevealDock
+          question={question}
+          session={session}
+          showWaiting={!questionClosed}
+        />
+      ) : null}
+      <RoomChatPanel
+        disabled={!localPlayerId}
+        dock="chyron"
+        lifted={shouldRevealAnswers}
+        localPlayerId={localPlayerId}
+        mode="drawer"
+        onSendChat={onSendChat}
+        session={session}
+        tone="dark"
+      />
       <Chyron session={session} />
     </>
   );
@@ -1694,7 +1748,7 @@ function VerdictReveal({
   );
 }
 
-function AnswerRevealPanel({
+function AnswerRevealDock({
   question,
   session,
   showWaiting,
@@ -1708,53 +1762,59 @@ function AnswerRevealPanel({
   const acceptableAnswers = question.acceptable_answers.filter(
     (answer) => answer && answer !== question.canonical_answer,
   );
+  const playerResponses = session.players
+    .filter((player) => player.role === "player")
+    .map((player) => {
+      const response = asRecord(questionSubmissions[player.id]);
+      const submitted = response.submitted === true;
+      const accepted = response.accepted === true;
+      const submittedText =
+        typeof response.submitted_text === "string" && response.submitted_text.trim()
+          ? response.submitted_text
+          : "No answer";
+      return { accepted, player, submitted, submittedText };
+    });
 
   return (
-    <div className="mt-4 rounded-xl border border-white/15 bg-midnight/65 p-4 text-white">
-      <div className="text-[10px] font-bold uppercase tracking-[0.35em] text-stagegold">
-        Answer reveal
-      </div>
-      <div className="mt-3 rounded-lg bg-white p-3 text-midnight">
-        <div className="text-[10px] font-bold uppercase tracking-[0.25em] text-midnight/45">
-          Correct answer
-        </div>
-        <div className="mt-1 text-sm font-bold leading-relaxed">
-          <InlineMathText text={question.canonical_answer || "Answer not configured"} />
-        </div>
-        {acceptableAnswers.length ? (
-          <div className="mt-2 text-xs font-semibold leading-relaxed text-midnight/60">
-            Also accepted: {acceptableAnswers.slice(0, 3).join(", ")}
+    <motion.section
+      animate={{ opacity: 1, y: 0 }}
+      className="fixed inset-x-3 bottom-20 z-30 mx-auto max-w-5xl overflow-hidden rounded-2xl border border-stagegold/30 bg-midnight/95 text-white shadow-stage backdrop-blur"
+      initial={{ opacity: 0, y: 24 }}
+      transition={{ duration: 0.2 }}
+    >
+      <div className="grid gap-3 p-3 sm:grid-cols-[1fr_auto] sm:items-center sm:p-4">
+        <div className="rounded-xl bg-white px-4 py-3 text-midnight">
+          <div className="text-[10px] font-bold uppercase tracking-[0.3em] text-midnight/45">
+            Correct
           </div>
-        ) : null}
-      </div>
+          <div className="mt-1 text-base font-black leading-snug sm:text-lg">
+            <InlineMathText text={question.canonical_answer || "Answer not configured"} />
+          </div>
+          {acceptableAnswers.length ? (
+            <div className="mt-1 line-clamp-1 text-xs font-semibold text-midnight/60">
+              Also accepted: {acceptableAnswers.slice(0, 3).join(", ")}
+            </div>
+          ) : null}
+        </div>
 
-      <div className="mt-3 grid gap-2">
-        {session.players
-          .filter((player) => player.role === "player")
-          .map((player) => {
-            const response = asRecord(questionSubmissions[player.id]);
-            const submitted = response.submitted === true;
-            const accepted = response.accepted === true;
-            const submittedText =
-              typeof response.submitted_text === "string" && response.submitted_text.trim()
-                ? response.submitted_text
-                : "No answer";
-
-            return (
-              <div
-                className="flex items-start justify-between gap-3 rounded-lg border border-white/10 bg-white/5 px-3 py-2"
-                key={player.id}
-              >
-                <div className="min-w-0">
-                  <div className="text-xs font-bold uppercase tracking-[0.2em] text-white/50">
-                    {player.display_name}
-                  </div>
-                  <div className="mt-1 break-words text-sm font-semibold text-white">
-                    {submitted ? <InlineMathText text={submittedText} /> : showWaiting ? "Still answering..." : "No answer"}
-                  </div>
+        <div className="flex gap-2 overflow-x-auto pb-1 sm:justify-end sm:pb-0">
+          {playerResponses.map(({ accepted, player, submitted, submittedText }) => (
+            <div
+              className={`min-w-40 max-w-60 shrink-0 rounded-xl border px-3 py-2 ${
+                submitted
+                  ? accepted
+                    ? "border-aqua/50 bg-aqua/15"
+                    : "border-coral/50 bg-coral/15"
+                  : "border-white/10 bg-white/5"
+              }`}
+              key={player.id}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="truncate text-[10px] font-black uppercase tracking-[0.2em] text-white/55">
+                  {player.display_name}
                 </div>
                 <div
-                  className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-black uppercase tracking-[0.18em] ${
+                  className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-black uppercase tracking-[0.16em] ${
                     submitted
                       ? accepted
                         ? "bg-aqua text-midnight"
@@ -1765,10 +1825,14 @@ function AnswerRevealPanel({
                   {submitted ? (accepted ? "Right" : "Miss") : showWaiting ? "..." : "Time"}
                 </div>
               </div>
-            );
-          })}
+              <div className="mt-1 truncate text-sm font-semibold text-white">
+                {submitted ? <InlineMathText text={submittedText} /> : showWaiting ? "Still answering..." : "No answer"}
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
-    </div>
+    </motion.section>
   );
 }
 
@@ -1936,21 +2000,44 @@ function multipleChoiceOptions(widget: Extract<AnswerWidget, { type: "multiple_c
 
 function RoomChatPanel({
   disabled,
+  dock = "chyron",
+  lifted = false,
   localPlayerId,
+  mode = "panel",
   onSendChat,
   session,
   tone,
 }: {
   disabled: boolean;
+  dock?: "screen" | "chyron";
+  lifted?: boolean;
   localPlayerId: string | null;
+  mode?: "panel" | "drawer";
   onSendChat: (message: string) => Promise<void>;
   session: LiveSession;
   tone: "dark" | "light";
 }) {
+  const messages = chatMessages(session).slice(-8);
   const [message, setMessage] = useState("");
   const [isSending, setIsSending] = useState(false);
-  const messages = chatMessages(session).slice(-8);
+  const [isOpen, setIsOpen] = useState(mode === "panel");
+  const [seenMessageCount, setSeenMessageCount] = useState(messages.length);
   const isDark = tone === "dark";
+  const unreadCount = Math.max(0, messages.length - seenMessageCount);
+  const bottomClass = lifted ? "bottom-56" : dock === "screen" ? "bottom-4" : "bottom-20";
+  const panelHeightClass = lifted ? "max-h-[46vh]" : "max-h-[70vh]";
+
+  useEffect(() => {
+    if (mode === "panel") {
+      setIsOpen(true);
+    }
+  }, [mode]);
+
+  useEffect(() => {
+    if (isOpen) {
+      setSeenMessageCount(messages.length);
+    }
+  }, [isOpen, messages.length]);
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -1968,19 +2055,30 @@ function RoomChatPanel({
     }
   }
 
-  return (
+  const panel = (
     <section
-      className={`rounded-xl border p-4 ${
+      className={`flex ${panelHeightClass} flex-col rounded-xl border p-4 ${
         isDark
-          ? "border-white/15 bg-white/5 text-white"
+          ? "border-white/15 bg-midnight/95 text-white shadow-stage"
           : "border-softline bg-white text-midnight"
       }`}
     >
-      <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.35em] text-stagegold">
-        <MessageCircle className="h-4 w-4" />
-        Room chat
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.35em] text-stagegold">
+          <MessageCircle className="h-4 w-4" />
+          Room chat
+        </div>
+        {mode === "drawer" ? (
+          <button
+            className="rounded-full p-1 text-white/65 transition hover:bg-white/10 hover:text-white"
+            onClick={() => setIsOpen(false)}
+            type="button"
+          >
+            <XCircle className="h-5 w-5" />
+          </button>
+        ) : null}
       </div>
-      <div className="mt-3 max-h-52 space-y-2 overflow-y-auto pr-1">
+      <div className="mt-3 min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
         {messages.length ? (
           messages.map((item) => {
             const mine = item.player_id === localPlayerId;
@@ -2031,6 +2129,41 @@ function RoomChatPanel({
       </form>
     </section>
   );
+
+  if (mode === "drawer") {
+    return (
+      <>
+        <button
+          className={`fixed right-4 ${bottomClass} z-40 inline-flex h-12 items-center gap-2 rounded-full border border-stagegold/45 bg-stagegold px-4 text-sm font-black uppercase tracking-wider text-midnight shadow-stage transition hover:bg-champagne`}
+          onClick={() => setIsOpen(true)}
+          type="button"
+        >
+          <MessageCircle className="h-4 w-4" />
+          Chat
+          {unreadCount > 0 ? (
+            <span className="ml-1 rounded-full bg-coral px-2 py-0.5 text-[10px] text-white">
+              {unreadCount}
+            </span>
+          ) : null}
+        </button>
+        <AnimatePresence>
+          {isOpen ? (
+            <motion.div
+              animate={{ opacity: 1, y: 0 }}
+              className={`fixed inset-x-3 ${bottomClass} z-50 sm:left-auto sm:right-4 sm:w-[380px]`}
+              exit={{ opacity: 0, y: 16 }}
+              initial={{ opacity: 0, y: 16 }}
+              transition={{ duration: 0.18 }}
+            >
+              {panel}
+            </motion.div>
+          ) : null}
+        </AnimatePresence>
+      </>
+    );
+  }
+
+  return panel;
 }
 
 function Chyron({ session }: { session: LiveSession }) {
@@ -2209,7 +2342,7 @@ function FinishedRoom({
         </div>
       </section>
 
-      <div className="mt-7 grid gap-5 lg:grid-cols-[1fr_360px]">
+      <div className="mt-7">
         <section className="grid gap-3 sm:grid-cols-2">
           {rankedPlayers.map((player, index) => (
             <article
@@ -2236,14 +2369,16 @@ function FinishedRoom({
             </article>
           ))}
         </section>
-        <RoomChatPanel
-          disabled={!localPlayerId}
-          localPlayerId={localPlayerId}
-          onSendChat={onSendChat}
-          session={session}
-          tone="dark"
-        />
       </div>
+      <RoomChatPanel
+        disabled={!localPlayerId}
+        dock="screen"
+        localPlayerId={localPlayerId}
+        mode="drawer"
+        onSendChat={onSendChat}
+        session={session}
+        tone="dark"
+      />
     </div>
   );
 }
