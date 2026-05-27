@@ -608,14 +608,14 @@ export function QuizHome() {
   }
 
   async function handleStartSession() {
-    if (!liveSession) {
+    if (!liveSession || !localPlayerId) {
       return;
     }
 
     setIsUpdatingSession(true);
     setSessionError(null);
     try {
-      setLiveSession(await startSession(liveSession.id));
+      setLiveSession(await startSession(liveSession.id, localPlayerId));
     } catch (err) {
       setSessionError(err instanceof Error ? err.message : "Could not start session");
     } finally {
@@ -674,14 +674,14 @@ export function QuizHome() {
   }
 
   async function handleAdvanceQuestion() {
-    if (!liveSession) {
+    if (!liveSession || !localPlayerId) {
       return;
     }
 
     setIsUpdatingSession(true);
     setSessionError(null);
     try {
-      setLiveSession(await advanceSessionQuestion(liveSession.id));
+      setLiveSession(await advanceSessionQuestion(liveSession.id, localPlayerId));
     } catch (err) {
       setSessionError(err instanceof Error ? err.message : "Could not advance question");
     } finally {

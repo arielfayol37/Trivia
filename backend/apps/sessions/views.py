@@ -3,6 +3,7 @@ import threading
 import uuid
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django.utils.dateparse import parse_datetime
@@ -143,8 +144,15 @@ class SessionPlayerReadyView(APIView):
 
 
 class SessionStartView(APIView):
-    def post(self, _request, session_id):
+    def post(self, request, session_id):
         session = get_object_or_404(_session_queryset(), pk=session_id)
+        host_error = _host_action_error(
+            session,
+            request.data.get("player_id"),
+            action="start the session",
+        )
+        if host_error:
+            return host_error
         if session.status != SessionStatus.LOBBY:
             return Response(
                 {"detail": "Only lobby sessions can be started"},
@@ -366,8 +374,15 @@ class SessionContinueView(APIView):
 
 
 class SessionNextQuestionView(APIView):
-    def post(self, _request, session_id):
+    def post(self, request, session_id):
         session = get_object_or_404(_session_queryset(), pk=session_id)
+        host_error = _host_action_error(
+            session,
+            request.data.get("player_id"),
+            action="force the next question",
+        )
+        if host_error:
+            return host_error
         if session.status != SessionStatus.PLAYING:
             return Response(
                 {"detail": "Only playing sessions can advance"},
@@ -407,6 +422,27 @@ def _get_join_session(validated: dict) -> Session:
 
 def _display_name_taken(session: Session, display_name: str) -> bool:
     return session.players.filter(display_name__iexact=display_name).exists()
+
+
+def _host_action_error(session: Session, player_id, *, action: str) -> Response | None:
+    if not player_id:
+        return Response(
+            {"detail": f"Only the host can {action}"},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    try:
+        player = SessionPlayer.objects.get(pk=player_id, session=session)
+    except (SessionPlayer.DoesNotExist, ValidationError, ValueError, TypeError):
+        return Response(
+            {"detail": f"Only the host can {action}"},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    if not player.is_host:
+        return Response(
+            {"detail": f"Only the host can {action}"},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    return None
 
 
 def _playable_questions(session: Session) -> list[Question]:

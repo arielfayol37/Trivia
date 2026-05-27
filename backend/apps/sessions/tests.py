@@ -28,6 +28,20 @@ class SessionApiTests(TestCase):
         self.quiz.save(update_fields=["status"])
         self.client = Client()
 
+    def _start_session(self, session_id: str, player_id: str):
+        return self.client.post(
+            f"/api/sessions/{session_id}/start/",
+            data={"player_id": player_id},
+            content_type="application/json",
+        )
+
+    def _force_next_question(self, session_id: str, player_id: str):
+        return self.client.post(
+            f"/api/sessions/{session_id}/next/",
+            data={"player_id": player_id},
+            content_type="application/json",
+        )
+
     def test_create_session_returns_invite_code_and_host_player(self):
         response = self.client.post(
             "/api/sessions/",
@@ -203,8 +217,9 @@ class SessionApiTests(TestCase):
             content_type="application/json",
         )
         session_id = create_response.json()["session"]["id"]
+        player_id = create_response.json()["player_id"]
 
-        start_response = self.client.post(f"/api/sessions/{session_id}/start/")
+        start_response = self._start_session(session_id, player_id)
 
         self.assertEqual(start_response.status_code, 200)
         payload = start_response.json()
@@ -274,14 +289,33 @@ class SessionApiTests(TestCase):
             content_type="application/json",
         )
         session_id = create_response.json()["session"]["id"]
+        player_id = create_response.json()["player_id"]
 
-        start_response = self.client.post(f"/api/sessions/{session_id}/start/")
+        start_response = self._start_session(session_id, player_id)
 
         self.assertEqual(start_response.status_code, 200)
         payload = start_response.json()
         self.assertEqual(payload["state"]["question_count"], 12)
         self.assertEqual(payload["state"]["selected_question_ids"], expected_question_ids)
         self.assertEqual(payload["state"]["question_id"], expected_question_ids[0])
+
+    def test_non_host_cannot_start_session(self):
+        create_response = self.client.post(
+            "/api/sessions/",
+            data={"quiz_id": str(self.quiz.id), "display_name": "Ariel"},
+            content_type="application/json",
+        )
+        session_id = create_response.json()["session"]["id"]
+        join_response = self.client.post(
+            "/api/sessions/join/",
+            data={"session_id": session_id, "display_name": "Friend"},
+            content_type="application/json",
+        )
+
+        start_response = self._start_session(session_id, join_response.json()["player_id"])
+
+        self.assertEqual(start_response.status_code, 403)
+        self.assertIn("Only the host", start_response.json()["detail"])
 
     def test_submit_answer_scores_current_question(self):
         create_response = self.client.post(
@@ -292,7 +326,7 @@ class SessionApiTests(TestCase):
         create_payload = create_response.json()
         session_id = create_payload["session"]["id"]
         player_id = create_payload["player_id"]
-        start_response = self.client.post(f"/api/sessions/{session_id}/start/")
+        start_response = self._start_session(session_id, player_id)
         canonical_answer = start_response.json()["quiz"]["rounds"][0]["questions"][0]["canonical_answer"]
 
         submit_response = self.client.post(
@@ -354,7 +388,7 @@ class SessionApiTests(TestCase):
         create_payload = create_response.json()
         session_id = create_payload["session"]["id"]
         player_id = create_payload["player_id"]
-        self.client.post(f"/api/sessions/{session_id}/start/")
+        self._start_session(session_id, player_id)
 
         with patch(
             "apps.sessions.views.judge_typed_answer_with_llm",
@@ -433,7 +467,7 @@ class SessionApiTests(TestCase):
         )
         session_id = create_response.json()["session"]["id"]
         player_id = create_response.json()["player_id"]
-        start_response = self.client.post(f"/api/sessions/{session_id}/start/")
+        start_response = self._start_session(session_id, player_id)
         self.assertEqual(start_response.json()["state"]["phase"], "question")
 
         submit_response = self.client.post(
@@ -495,7 +529,7 @@ class SessionApiTests(TestCase):
         )
         session_id = create_response.json()["session"]["id"]
         player_id = create_response.json()["player_id"]
-        self.client.post(f"/api/sessions/{session_id}/start/")
+        self._start_session(session_id, player_id)
 
         submit_response = self.client.post(
             f"/api/sessions/{session_id}/players/{player_id}/answer/",
@@ -558,7 +592,7 @@ class SessionApiTests(TestCase):
         )
         session_id = create_response.json()["session"]["id"]
         player_id = create_response.json()["player_id"]
-        self.client.post(f"/api/sessions/{session_id}/start/")
+        self._start_session(session_id, player_id)
 
         submit_response = self.client.post(
             f"/api/sessions/{session_id}/players/{player_id}/answer/",
@@ -594,7 +628,7 @@ class SessionApiTests(TestCase):
             content_type="application/json",
         )
         friend_id = join_response.json()["player_id"]
-        start_response = self.client.post(f"/api/sessions/{session_id}/start/")
+        start_response = self._start_session(session_id, host_id)
         first_question_id = start_response.json()["state"]["question_id"]
         canonical_answer = start_response.json()["quiz"]["rounds"][0]["questions"][0]["canonical_answer"]
 
@@ -633,7 +667,7 @@ class SessionApiTests(TestCase):
             content_type="application/json",
         )
         friend_id = join_response.json()["player_id"]
-        start_response = self.client.post(f"/api/sessions/{session_id}/start/")
+        start_response = self._start_session(session_id, host_id)
         first_question_id = start_response.json()["state"]["question_id"]
         canonical_answer = start_response.json()["quiz"]["rounds"][0]["questions"][0]["canonical_answer"]
 
@@ -680,7 +714,7 @@ class SessionApiTests(TestCase):
             content_type="application/json",
         )
         friend_id = join_response.json()["player_id"]
-        start_response = self.client.post(f"/api/sessions/{session_id}/start/")
+        start_response = self._start_session(session_id, host_id)
         first_question_id = start_response.json()["state"]["question_id"]
         canonical_answer = start_response.json()["quiz"]["rounds"][0]["questions"][0]["canonical_answer"]
 
@@ -723,7 +757,7 @@ class SessionApiTests(TestCase):
             content_type="application/json",
         )
         friend_id = join_response.json()["player_id"]
-        start_response = self.client.post(f"/api/sessions/{session_id}/start/")
+        start_response = self._start_session(session_id, host_id)
         first_question_id = start_response.json()["state"]["question_id"]
         canonical_answer = start_response.json()["quiz"]["rounds"][0]["questions"][0]["canonical_answer"]
 
@@ -763,7 +797,7 @@ class SessionApiTests(TestCase):
         )
         session_id = create_response.json()["session"]["id"]
         player_id = create_response.json()["player_id"]
-        self.client.post(f"/api/sessions/{session_id}/start/")
+        self._start_session(session_id, player_id)
 
         continue_response = self.client.post(
             f"/api/sessions/{session_id}/players/{player_id}/continue/",
@@ -780,7 +814,8 @@ class SessionApiTests(TestCase):
             content_type="application/json",
         )
         session_id = create_response.json()["session"]["id"]
-        self.client.post(f"/api/sessions/{session_id}/start/")
+        player_id = create_response.json()["player_id"]
+        self._start_session(session_id, player_id)
         session = _session_queryset().get(pk=session_id)
         state = session.state
         state["question_started_at"] = (timezone.now() - timedelta(seconds=10)).isoformat()
@@ -802,14 +837,36 @@ class SessionApiTests(TestCase):
             content_type="application/json",
         )
         session_id = create_response.json()["session"]["id"]
-        self.client.post(f"/api/sessions/{session_id}/start/")
+        player_id = create_response.json()["player_id"]
+        self._start_session(session_id, player_id)
 
-        next_response = self.client.post(f"/api/sessions/{session_id}/next/")
+        next_response = self._force_next_question(session_id, player_id)
 
         self.assertEqual(next_response.status_code, 200)
         payload = next_response.json()
         self.assertEqual(payload["status"], SessionStatus.FINISHED)
         self.assertEqual(payload["state"]["phase"], "finished")
+
+    def test_non_host_cannot_force_next_question(self):
+        create_response = self.client.post(
+            "/api/sessions/",
+            data={"quiz_id": str(self.quiz.id), "display_name": "Ariel", "question_count": 2},
+            content_type="application/json",
+        )
+        create_payload = create_response.json()
+        session_id = create_payload["session"]["id"]
+        host_id = create_payload["player_id"]
+        join_response = self.client.post(
+            "/api/sessions/join/",
+            data={"session_id": session_id, "display_name": "Friend"},
+            content_type="application/json",
+        )
+        self._start_session(session_id, host_id)
+
+        next_response = self._force_next_question(session_id, join_response.json()["player_id"])
+
+        self.assertEqual(next_response.status_code, 403)
+        self.assertIn("Only the host", next_response.json()["detail"])
 
     def test_list_race_round_can_start_and_score_items(self):
         list_race_quiz = create_quiz_from_document(
@@ -848,7 +905,7 @@ class SessionApiTests(TestCase):
         session_id = create_payload["session"]["id"]
         player_id = create_payload["player_id"]
 
-        start_response = self.client.post(f"/api/sessions/{session_id}/start/")
+        start_response = self._start_session(session_id, player_id)
 
         self.assertEqual(start_response.status_code, 200)
         self.assertEqual(start_response.json()["state"]["phase"], "list_race")
@@ -915,7 +972,7 @@ class SessionApiTests(TestCase):
         session_id = create_response.json()["session"]["id"]
         player_id = create_response.json()["player_id"]
 
-        start_response = self.client.post(f"/api/sessions/{session_id}/start/")
+        start_response = self._start_session(session_id, player_id)
 
         self.assertEqual(start_response.status_code, 200)
         self.assertEqual(start_response.json()["state"]["phase"], "betting")
@@ -1010,8 +1067,9 @@ class SessionApiTests(TestCase):
             content_type="application/json",
         )
         session_id = create_response.json()["session"]["id"]
+        player_id = create_response.json()["player_id"]
 
-        start_response = self.client.post(f"/api/sessions/{session_id}/start/")
+        start_response = self._start_session(session_id, player_id)
 
         current = start_response.json()["state"]["meta_strategy"]["current"]
         self.assertEqual(current["wager_values"], [1, 4, 7, 10])
@@ -1067,7 +1125,7 @@ class SessionApiTests(TestCase):
         )
         session_id = create_response.json()["session"]["id"]
         player_id = create_response.json()["player_id"]
-        self.client.post(f"/api/sessions/{session_id}/start/")
+        self._start_session(session_id, player_id)
         session = _session_queryset().get(pk=session_id)
         state = session.state
         state["question_started_at"] = (timezone.now() - timedelta(seconds=5)).isoformat()
@@ -1145,7 +1203,7 @@ class SessionApiTests(TestCase):
         )
         session_id = create_response.json()["session"]["id"]
         player_id = create_response.json()["player_id"]
-        self.client.post(f"/api/sessions/{session_id}/start/")
+        self._start_session(session_id, player_id)
         self.client.post(
             f"/api/sessions/{session_id}/players/{player_id}/wager/",
             data={"points": 1},
@@ -1158,7 +1216,7 @@ class SessionApiTests(TestCase):
             data={"submitted_text": "alpha"},
             content_type="application/json",
         )
-        next_response = self.client.post(f"/api/sessions/{session_id}/next/")
+        next_response = self._force_next_question(session_id, player_id)
 
         self.assertEqual(next_response.status_code, 200)
         self.assertEqual(next_response.json()["state"]["phase"], "betting")
@@ -1231,7 +1289,7 @@ class SessionApiTests(TestCase):
         )
         session_id = create_response.json()["session"]["id"]
         player_id = create_response.json()["player_id"]
-        self.client.post(f"/api/sessions/{session_id}/start/")
+        self._start_session(session_id, player_id)
         self.client.post(
             f"/api/sessions/{session_id}/players/{player_id}/wager/",
             data={"points": 1},
@@ -1244,7 +1302,7 @@ class SessionApiTests(TestCase):
             data={"submitted_text": "alpha"},
             content_type="application/json",
         )
-        self.client.post(f"/api/sessions/{session_id}/next/")
+        self._force_next_question(session_id, player_id)
         session = _session_queryset().get(pk=session_id)
         state = session.state
         state["question_started_at"] = (timezone.now() - timedelta(seconds=5)).isoformat()

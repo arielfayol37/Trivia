@@ -144,9 +144,10 @@ export function setSessionPlayerReady(sessionId: string, playerId: string, isRea
   );
 }
 
-export function startSession(sessionId: string) {
+export function startSession(sessionId: string, playerId: string) {
   return request<LiveSession>(`/api/sessions/${encodeURIComponent(sessionId)}/start/`, {
     method: "POST",
+    body: JSON.stringify({ player_id: playerId }),
   });
 }
 
@@ -193,8 +194,9 @@ export function continueSessionQuestion(sessionId: string, playerId: string) {
   );
 }
 
-export function advanceSessionQuestion(sessionId: string) {
+export function advanceSessionQuestion(sessionId: string, playerId: string) {
   return request<LiveSession>(`/api/sessions/${encodeURIComponent(sessionId)}/next/`, {
     method: "POST",
+    body: JSON.stringify({ player_id: playerId }),
   });
 }

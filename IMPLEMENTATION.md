@@ -103,6 +103,8 @@ Implemented:
   - Socket heartbeat pings refresh `last_seen_at`, and stale online presence stops
     counting as active after `SESSION_PRESENCE_STALE_AFTER_S` (default 45s).
   - Late answers after the question deadline are rejected.
+  - Start-session and force-next mutations require the host player's id server-side;
+    non-host players cannot trigger them by calling the REST endpoint directly.
 - Play UI has a first-pass game-show/stage visual direction:
   - Player-facing Play Hub.
   - Lobby room with large invite code and player tiles.
@@ -421,6 +423,7 @@ for every question.
   all-submit, or ready-next progression.
 - Heartbeat-backed presence staleness cutoff for sockets that disappear without a clean
   close.
+- Server-side host enforcement for start and force-next actions.
 - REST-backed session state machine: lobby → playing → finished.
 - Sequential authored-question play; no default random 10-question sampling.
 - Text input and multiple-choice answer submission.
