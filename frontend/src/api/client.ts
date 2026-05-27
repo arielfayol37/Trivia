@@ -1,4 +1,10 @@
-import type { HealthResponse, LiveSession, Quiz, SessionJoinResponse } from "./types";
+import type {
+  HealthResponse,
+  LiveSession,
+  Quiz,
+  SessionInvitePreview,
+  SessionJoinResponse,
+} from "./types";
 
 export type QuizOp =
   | {
@@ -122,6 +128,13 @@ export function getSession(sessionId: string) {
   return request<LiveSession>(`/api/sessions/${encodeURIComponent(sessionId)}/`, {
     method: "GET",
   });
+}
+
+export function getSessionInvitePreview(inviteCode: string) {
+  return request<SessionInvitePreview>(
+    `/api/sessions/invite/${encodeURIComponent(inviteCode.trim().toUpperCase())}/`,
+    { method: "GET" },
+  );
 }
 
 export function getSessionSocketUrl(sessionId: string, playerId?: string | null) {

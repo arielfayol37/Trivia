@@ -33,6 +33,7 @@ import {
   getSessionSocketUrl,
   getHealth,
   getSession,
+  getSessionInvitePreview,
   joinSession,
   listQuizzes,
   placeSessionWager,
@@ -41,7 +42,15 @@ import {
   startSession,
   submitSessionAnswer,
 } from "../../api/client";
-import type { AnswerWidget, HealthResponse, LiveSession, Question, Quiz, SessionChatMessage } from "../../api/types";
+import type {
+  AnswerWidget,
+  HealthResponse,
+  LiveSession,
+  Question,
+  Quiz,
+  SessionChatMessage,
+  SessionInvitePreview,
+} from "../../api/types";
 import { Button } from "../../components/ui/Button";
 import { Input } from "../../components/ui/Field";
 import { cn } from "../../lib/cn";
@@ -203,6 +212,10 @@ function categoryForQuiz(quiz: Quiz) {
       category.keywords.some((keyword) => searchText.includes(keyword)),
     ) ?? quizCategories[quizCategories.length - 1]
   );
+}
+
+function categoryLabelForId(categoryId: Quiz["category"]) {
+  return quizCategories.find((category) => category.id === categoryId)?.label ?? "General";
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -401,7 +414,10 @@ export function QuizHome() {
   const [difficulty, setDifficulty] = useState<DifficultyFilter>("all");
   const [playerName, setPlayerName] = useState("");
   const [joinCode, setJoinCode] = useState(initialJoinCode);
+  const [isInviteJoinMode, setIsInviteJoinMode] = useState(() => Boolean(initialJoinCode().trim()));
   const [liveSession, setLiveSession] = useState<LiveSession | null>(null);
+  const [invitePreview, setInvitePreview] = useState<SessionInvitePreview | null>(null);
+  const [isLoadingInvitePreview, setIsLoadingInvitePreview] = useState(false);
   const [localPlayerId, setLocalPlayerId] = useState<string | null>(null);
   const [isLoadingQuizzes, setIsLoadingQuizzes] = useState(true);
   const [isCreatingSession, setIsCreatingSession] = useState(false);
@@ -491,6 +507,44 @@ export function QuizHome() {
     };
   }, [liveSession?.id, localPlayerId]);
 
+  useEffect(() => {
+    if (!isInviteJoinMode) {
+      setInvitePreview(null);
+      setIsLoadingInvitePreview(false);
+      return;
+    }
+
+    const code = joinCode.trim();
+    if (!code) {
+      setInvitePreview(null);
+      setIsLoadingInvitePreview(false);
+      return;
+    }
+
+    let cancelled = false;
+    setIsLoadingInvitePreview(true);
+    getSessionInvitePreview(code)
+      .then((preview) => {
+        if (!cancelled) {
+          setInvitePreview(preview);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setInvitePreview(null);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsLoadingInvitePreview(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isInviteJoinMode, joinCode]);
+
   const baseFilteredQuizzes = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
     return quizzes.filter((quiz) => {
@@ -555,6 +609,7 @@ export function QuizHome() {
       setLocalPlayerId(response.player_id);
       setSelectedQuizId(response.session.quiz.id);
       setJoinCode(response.session.invite_code);
+      setIsInviteJoinMode(false);
       updateJoinUrl(response.session.invite_code);
     } catch (err) {
       setSessionError(err instanceof Error ? err.message : "Could not create lobby");
@@ -583,6 +638,7 @@ export function QuizHome() {
       setLocalPlayerId(response.player_id);
       setSelectedQuizId(response.session.quiz.id);
       setJoinCode(response.session.invite_code);
+      setIsInviteJoinMode(false);
       updateJoinUrl(response.session.invite_code);
     } catch (err) {
       setSessionError(err instanceof Error ? err.message : "Could not join lobby");
@@ -711,6 +767,14 @@ export function QuizHome() {
     setLocalPlayerId(null);
     setSelectedQuizId(null);
     setJoinCode("");
+    setIsInviteJoinMode(false);
+    window.history.replaceState(null, "", "/");
+  }
+
+  function handleBrowseFromInvite() {
+    setIsInviteJoinMode(false);
+    setJoinCode("");
+    setSessionError(null);
     window.history.replaceState(null, "", "/");
   }
 
@@ -720,6 +784,7 @@ export function QuizHome() {
     setLocalPlayerId(null);
     setSelectedQuizId(null);
     setJoinCode("");
+    setIsInviteJoinMode(false);
     setSearch(quiz.topic || quiz.title);
     setCategory(categoryForQuiz(quiz).id);
     setDifficulty("all");
@@ -730,7 +795,7 @@ export function QuizHome() {
 
   return (
     <main className="min-h-screen bg-midnight text-white">
-      {isGameActive ? null : <TopBar health={health} dark />}
+      {isGameActive || isInviteJoinMode ? null : <TopBar health={health} dark />}
 
       {liveSession?.status === "playing" || liveSession?.status === "finished" ? (
         <GameRoom
@@ -756,6 +821,19 @@ export function QuizHome() {
           onStartSession={handleStartSession}
           session={liveSession}
           setSessionError={setSessionError}
+          sessionError={sessionError}
+        />
+      ) : isInviteJoinMode ? (
+        <InviteJoinGate
+          invitePreview={invitePreview}
+          isLoadingInvitePreview={isLoadingInvitePreview}
+          isJoiningSession={isJoiningSession}
+          joinCode={joinCode}
+          onBrowse={handleBrowseFromInvite}
+          onJoinCodeChange={setJoinCode}
+          onJoinLobby={handleJoinLobby}
+          onPlayerNameChange={setPlayerName}
+          playerName={playerName}
           sessionError={sessionError}
         />
       ) : selectedQuiz ? (
@@ -845,6 +923,186 @@ function TopBar({ health, dark }: { health: HealthResponse | null; dark: boolean
         </div>
       </div>
     </header>
+  );
+}
+
+function InviteJoinGate({
+  invitePreview,
+  isLoadingInvitePreview,
+  isJoiningSession,
+  joinCode,
+  onBrowse,
+  onJoinCodeChange,
+  onJoinLobby,
+  onPlayerNameChange,
+  playerName,
+  sessionError,
+}: {
+  invitePreview: SessionInvitePreview | null;
+  isLoadingInvitePreview: boolean;
+  isJoiningSession: boolean;
+  joinCode: string;
+  onBrowse: () => void;
+  onJoinCodeChange: (code: string) => void;
+  onJoinLobby: (event: FormEvent) => void;
+  onPlayerNameChange: (name: string) => void;
+  playerName: string;
+  sessionError: string | null;
+}) {
+  const previewStatus = invitePreview?.status;
+  const canJoin = !previewStatus || previewStatus === "lobby";
+  const statusLabel =
+    previewStatus === "playing"
+      ? "Already playing"
+      : previewStatus === "finished"
+        ? "Finished"
+        : previewStatus === "abandoned"
+          ? "Closed"
+          : "Lobby";
+
+  return (
+    <div className="flex min-h-screen items-center justify-center px-5 py-8">
+      <section className="w-full max-w-4xl overflow-hidden rounded-2xl bg-night text-white shadow-stage">
+        <div className="grid min-h-[min(720px,calc(100vh-4rem))] lg:grid-cols-[1fr_380px]">
+          <div className="relative flex flex-col justify-between overflow-hidden p-6 sm:p-8">
+            <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-stagegold/15 via-transparent to-magenta/15" />
+            <div className="relative">
+              <a className="inline-flex items-center gap-3" href="/">
+                <span className="flex h-10 w-10 items-center justify-center rounded-md bg-stagegold text-midnight">
+                  <Sparkles className="h-5 w-5" />
+                </span>
+                <span className="font-display text-2xl uppercase leading-none tracking-wide text-white">
+                  Trivia
+                </span>
+              </a>
+            </div>
+
+            <div className="relative py-12 sm:py-16">
+              <div className="text-[10px] font-bold uppercase tracking-[0.5em] text-aqua">
+                Invite link
+              </div>
+              <h1 className="mt-3 max-w-xl font-display text-5xl uppercase leading-[0.92] tracking-wide sm:text-7xl">
+                Join the room
+              </h1>
+              <div className="mt-8 inline-flex rounded-xl border border-stagegold/30 bg-stagegold/10 px-5 py-4">
+                <div>
+                  <div className="text-[10px] font-bold uppercase tracking-[0.35em] text-stagegold/80">
+                    Code
+                  </div>
+                  <div className="mt-1 font-display text-5xl uppercase tracking-[0.22em] text-stagegold sm:text-6xl">
+                    {joinCode || "CODE"}
+                  </div>
+                </div>
+              </div>
+              <div className="mt-6 max-w-xl rounded-xl border border-white/10 bg-white/5 p-4">
+                {isLoadingInvitePreview ? (
+                  <div className="flex items-center gap-2 text-sm font-semibold text-white/70">
+                    <Loader2 className="h-4 w-4 animate-spin text-aqua" />
+                    Checking room
+                  </div>
+                ) : invitePreview ? (
+                  <>
+                    <div className="text-[10px] font-bold uppercase tracking-[0.35em] text-white/45">
+                      {statusLabel}
+                    </div>
+                    <div className="mt-2 font-display text-3xl uppercase leading-tight text-white">
+                      {invitePreview.quiz.title}
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2 text-xs font-bold uppercase tracking-[0.18em] text-white/55">
+                      <span>{categoryLabelForId(invitePreview.quiz.category)}</span>
+                      <span>{invitePreview.quiz.topic || "general"}</span>
+                      <span>{invitePreview.quiz.difficulty}</span>
+                    </div>
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      {invitePreview.players.map((player) => (
+                        <span
+                          className="rounded-full bg-white/10 px-3 py-1.5 text-xs font-semibold text-white/80"
+                          key={player.display_name}
+                        >
+                          {player.display_name}
+                          {player.is_host ? " · host" : ""}
+                        </span>
+                      ))}
+                      {invitePreview.player_count === 0 ? (
+                        <span className="text-sm text-white/55">No players waiting</span>
+                      ) : null}
+                    </div>
+                  </>
+                ) : (
+                  <div className="text-sm font-semibold text-white/60">Room {joinCode}</div>
+                )}
+              </div>
+            </div>
+
+            <div className="relative">
+              <button
+                className="inline-flex items-center gap-2 text-xs font-bold uppercase tracking-[0.25em] text-white/60 transition hover:text-white"
+                onClick={onBrowse}
+                type="button"
+              >
+                <ArrowLeft className="h-4 w-4" />
+                Browse quizzes
+              </button>
+            </div>
+          </div>
+
+          <form
+            className="flex flex-col justify-center border-t border-white/10 bg-white/5 p-6 sm:p-8 lg:border-l lg:border-t-0"
+            onSubmit={onJoinLobby}
+          >
+            <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.4em] text-aqua">
+              <LogIn className="h-4 w-4" />
+              Player entry
+            </div>
+            <div className="mt-5 grid gap-4">
+              <label className="block">
+                <span className="mb-2 block text-[10px] font-bold uppercase tracking-[0.35em] text-white/55">
+                  Player name
+                </span>
+                <Input
+                  autoComplete="nickname"
+                  autoFocus
+                  className="h-14 border-white/15 bg-white px-4 text-base font-semibold text-midnight"
+                  placeholder="Your name"
+                  value={playerName}
+                  onChange={(event) => onPlayerNameChange(event.target.value)}
+                />
+              </label>
+              <label className="block">
+                <span className="mb-2 block text-[10px] font-bold uppercase tracking-[0.35em] text-white/55">
+                  Room code
+                </span>
+                <Input
+                  className="h-14 border-white/15 bg-white text-center font-display text-3xl uppercase tracking-[0.28em] text-midnight"
+                  placeholder="CODE"
+                  value={joinCode}
+                  onChange={(event) => onJoinCodeChange(event.target.value.toUpperCase())}
+                />
+              </label>
+              <Button
+                className="h-14 uppercase tracking-wider"
+                disabled={isJoiningSession || !canJoin || !joinCode.trim() || !playerName.trim()}
+                type="submit"
+                variant="stage"
+              >
+                {isJoiningSession ? <Loader2 className="h-4 w-4 animate-spin" /> : <Users className="h-4 w-4" />}
+                Join the show
+              </Button>
+            </div>
+            {!canJoin ? (
+              <div className="mt-4 rounded-md border border-stagegold/30 bg-stagegold/10 px-3 py-2 text-sm font-semibold text-stagegold">
+                This room is {statusLabel.toLowerCase()}.
+              </div>
+            ) : null}
+            {sessionError ? (
+              <div className="mt-4 rounded-md border border-inviteError/40 bg-inviteError/10 px-3 py-2 text-sm font-semibold text-inviteError">
+                {sessionError}
+              </div>
+            ) : null}
+          </form>
+        </div>
+      </section>
+    </div>
   );
 }
 

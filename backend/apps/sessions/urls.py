@@ -5,6 +5,7 @@ from apps.sessions.views import (
     SessionChatView,
     SessionContinueView,
     SessionDetailView,
+    SessionInvitePreviewView,
     SessionJoinView,
     SessionNextQuestionView,
     SessionPlayerReadyView,
@@ -16,6 +17,11 @@ from apps.sessions.views import (
 urlpatterns = [
     path("", SessionCreateView.as_view(), name="session-create"),
     path("join/", SessionJoinView.as_view(), name="session-join"),
+    path(
+        "invite/<str:invite_code>/",
+        SessionInvitePreviewView.as_view(),
+        name="session-invite-preview",
+    ),
     path("<uuid:session_id>/", SessionDetailView.as_view(), name="session-detail"),
     path("<uuid:session_id>/start/", SessionStartView.as_view(), name="session-start"),
     path("<uuid:session_id>/next/", SessionNextQuestionView.as_view(), name="session-next"),

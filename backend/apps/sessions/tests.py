@@ -106,6 +106,26 @@ class SessionApiTests(TestCase):
         self.assertEqual(join_response.status_code, 400)
         self.assertEqual(join_response.json()["detail"], "That name is already in this room")
 
+    def test_invite_preview_returns_room_summary_without_questions(self):
+        create_response = self.client.post(
+            "/api/sessions/",
+            data={"quiz_id": str(self.quiz.id), "display_name": "Ariel"},
+            content_type="application/json",
+        )
+        invite_code = create_response.json()["session"]["invite_code"]
+
+        preview_response = self.client.get(f"/api/sessions/invite/{invite_code.lower()}/")
+
+        self.assertEqual(preview_response.status_code, 200)
+        payload = preview_response.json()
+        self.assertEqual(payload["invite_code"], invite_code)
+        self.assertEqual(payload["status"], SessionStatus.LOBBY)
+        self.assertEqual(payload["quiz"]["title"], self.quiz.title)
+        self.assertNotIn("rounds", payload["quiz"])
+        self.assertEqual(payload["player_count"], 1)
+        self.assertEqual(payload["players"][0]["display_name"], "Ariel")
+        self.assertTrue(payload["players"][0]["is_host"])
+
     def test_ready_endpoint_updates_player_state(self):
         create_response = self.client.post(
             "/api/sessions/",

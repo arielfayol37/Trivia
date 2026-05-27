@@ -60,7 +60,8 @@ Implemented:
   `quiz.update_metadata`, `question.update`, `round.update_config`, `items.bulk_set`.
 - Live play exists through REST mutations + WebSocket session snapshots:
   - Session/lobby creation with invite codes.
-  - Join-by-link.
+  - Join-by-link with a focused invite landing screen and safe room preview that shows
+    quiz/player summary without exposing question content.
   - Ready states.
   - Host-controlled start.
   - All-ready lobby countdown with host "Start now" override.

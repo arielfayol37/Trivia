@@ -118,6 +118,15 @@ class SessionJoinView(APIView):
         )
 
 
+class SessionInvitePreviewView(APIView):
+    def get(self, _request, invite_code):
+        session = get_object_or_404(
+            _session_queryset(),
+            invite_code=str(invite_code).strip().upper(),
+        )
+        return Response(_session_invite_preview(session))
+
+
 class SessionPlayerReadyView(APIView):
     def post(self, request, session_id, player_id):
         serializer = ReadySerializer(data=request.data)
@@ -409,6 +418,35 @@ def _session_response(session: Session, player_id) -> dict:
     return {
         "session": SessionSerializer(refreshed).data,
         "player_id": str(player_id),
+    }
+
+
+def _session_invite_preview(session: Session) -> dict:
+    active_players = [
+        player
+        for player in session.players.all()
+        if player.role == SessionRole.PLAYER and player.left_at is None
+    ]
+    return {
+        "id": str(session.id),
+        "invite_code": session.invite_code,
+        "status": session.status,
+        "quiz": {
+            "id": str(session.quiz.id),
+            "title": session.quiz.title,
+            "category": session.quiz.category,
+            "topic": session.quiz.topic,
+            "difficulty": session.quiz.difficulty,
+        },
+        "player_count": len(active_players),
+        "players": [
+            {
+                "display_name": player.display_name,
+                "is_host": player.is_host,
+                "is_ready": player.is_ready,
+            }
+            for player in active_players[:8]
+        ],
     }
 
 

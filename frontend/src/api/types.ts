@@ -94,6 +94,19 @@ export type LiveSession = {
   ended_at: string | null;
 };
 
+export type SessionInvitePreview = {
+  id: string;
+  invite_code: string;
+  status: "lobby" | "playing" | "finished" | "abandoned";
+  quiz: Pick<Quiz, "id" | "title" | "category" | "topic" | "difficulty">;
+  player_count: number;
+  players: Array<{
+    display_name: string;
+    is_host: boolean;
+    is_ready: boolean;
+  }>;
+};
+
 export type SessionJoinResponse = {
   session: LiveSession;
   player_id: string;
