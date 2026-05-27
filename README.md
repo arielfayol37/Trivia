@@ -27,9 +27,11 @@ Open `http://localhost:5173`.
 By default `LLM_PROVIDER=sample`, so the authoring endpoint uses a deterministic local
 sample generator. That keeps the UI testable without making LLM calls.
 
-When you are ready for real generation, set `LLM_PROVIDER=openai` or
-`LLM_PROVIDER=anthropic` in `.env`, then fill the matching API key and model variables.
-Do not put API keys in chat or commit them.
+When you are ready for real generation and live LLM answer judging, set
+`LLM_PROVIDER=openai` or `LLM_PROVIDER=anthropic` in `.env`, then fill the matching API
+key and model variables. `OPENAI_JUDGE_MODEL` / `ANTHROPIC_JUDGE_MODEL` are used for
+typed-answer judge fallback; if omitted, the app falls back to the matching authoring
+model. Do not put API keys in chat or commit them.
 
 ## Same-Network Phone Testing
 

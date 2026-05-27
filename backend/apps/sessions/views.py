@@ -12,6 +12,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.judging.fuzzy import fuzzy_match
+from apps.judging.llm import judge_typed_answer_with_llm
 from apps.quizzes.models import JudgeMode, Question, Quiz, QuizStatus, Round, RoundType
 from apps.sessions.models import AnswerSubmission, Session, SessionPlayer, SessionRole, SessionStatus
 from apps.sessions.realtime import broadcast_session_snapshot_sync
@@ -211,6 +212,7 @@ class SessionSubmitAnswerView(APIView):
                 "accepted": result["accepted"],
                 "points_awarded": points_awarded,
                 "judge_mode_used": result["judge_mode_used"],
+                "judge_latency_ms": result.get("judge_latency_ms", 0),
                 "judge_metadata": result["judge_metadata"],
             },
         )
@@ -225,6 +227,7 @@ class SessionSubmitAnswerView(APIView):
             "points_awarded": points_awarded,
             "submitted_text": submitted_text,
             "submitted": True,
+            "judge_mode_used": result["judge_mode_used"],
         }
         scores = state.setdefault("scores", {})
         scores[player_id_text] = _score_for_player(session, player)
@@ -730,9 +733,24 @@ def _judge_submission(question: Question, submitted_text: str, submitted_payload
         }
 
     result = fuzzy_match(submitted_text, acceptable_answers)
+    if not result["accepted"]:
+        llm_result = judge_typed_answer_with_llm(
+            question,
+            submitted_text,
+            fuzzy_result=result,
+        )
+        if llm_result:
+            return {
+                "accepted": llm_result["accepted"],
+                "judge_mode_used": JudgeMode.LLM,
+                "judge_latency_ms": llm_result.get("judge_latency_ms", 0),
+                "judge_metadata": llm_result["judge_metadata"],
+            }
+
     return {
         "accepted": result["accepted"],
         "judge_mode_used": JudgeMode.FUZZY,
+        "judge_latency_ms": 0,
         "judge_metadata": result,
     }
 

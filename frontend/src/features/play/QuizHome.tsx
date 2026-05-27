@@ -1415,6 +1415,10 @@ function ListRaceRoom({
   const localPlayer = session.players.find((player) => player.id === localPlayerId);
   const isHost = Boolean(localPlayer?.is_host);
 
+  useEffect(() => {
+    window.scrollTo({ left: 0, top: 0, behavior: "auto" });
+  }, [roundId]);
+
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
     const trimmed = answer.trim();
@@ -1577,6 +1581,12 @@ function PlayingRoom({
   useEffect(() => {
     const timer = window.setInterval(() => setNowMs(Date.now()), 250);
     return () => window.clearInterval(timer);
+  }, [question?.id]);
+
+  useEffect(() => {
+    if (question?.id) {
+      window.scrollTo({ left: 0, top: 0, behavior: "auto" });
+    }
   }, [question?.id]);
 
   const progress = questionProgress(session);

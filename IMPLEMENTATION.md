@@ -57,6 +57,9 @@ Implemented:
   - Sequential authored-question play; no default 10-question sampling.
   - Text input and multiple-choice submission.
   - Fuzzy judging and score updates.
+  - Live LLM fallback judging for typed answers after a fuzzy miss. It uses
+    `OPENAI_JUDGE_MODEL` / `ANTHROPIC_JUDGE_MODEL` when set, otherwise the configured
+    authoring model, and does nothing if no provider/model is configured.
   - Correct-answer reveal after submission/timeout, including each player's submitted
     text for the active question.
   - Session joins reject duplicate display names case-insensitively, so a room cannot
@@ -90,6 +93,7 @@ Implemented:
     score chyron, reducing scroll on phone-sized screens.
   - Mobile form controls use 16px text to avoid iOS/Safari zooming into focused answer
     and chat fields.
+  - New questions reset the window scroll position to the top.
   - Question prompt text is larger in play mode so short prompts use the card more
     intentionally.
 
@@ -115,6 +119,8 @@ Still not done:
   security-redacted per player.
 - Full live support for all answer widgets and round types (`list_input`, `ordering`,
   `matching`, `image_choice`, `hotspot`, full `meta_strategy`, full `buzz_in`).
+- LLM judge fallback currently applies to standard typed open-answer questions, not
+  list-race item matching.
 - Post-game review/replay beyond the current final scoreboard and action buttons.
 - Anti-cheat instrumentation/enforcement.
 - Accounts/auth polish.
@@ -552,11 +558,19 @@ questions.
    - Both subscribe to the same `Quiz` state (REST + targeted refetch after each op).
    - Form actions call REST endpoints that wrap the same op functions.
 5. Source material UX (v1 scope): paste text + topic string only. PDF deferred to v1.5.
-6. Live LLM judging (`apps/judging/llm_judge.py`):
-   - Called only for questions with `judge_mode = "llm"`.
-   - Inputs: question, canonical answer, player's typed answer, strictness setting.
-   - Per-session answer cache: `(question_id, normalized_answer) → verdict`.
-   - Async; the WS broadcast for `session.answer_judged` waits on the future.
+6. Live LLM judging (`apps/judging/llm.py`):
+   - Implemented for standard typed open-answer questions after fuzzy judging rejects
+     the answer.
+   - Provider abstraction supports OpenAI and Anthropic judge models.
+   - Inputs: prompt, canonical answer, acceptable answers, judge config, fuzzy result,
+     and player's typed answer.
+   - Structured JSON output: `accepted`, `confidence`, `reasoning`, optional
+     `matched_answer`.
+   - Sync for now because the play mutation is still REST-backed; the future WS/event
+     protocol can make this async.
+   - Persists judge metadata and latency in `AnswerSubmission`.
+   - Remaining: per-session answer cache `(question_id, normalized_answer) → verdict`
+     and list-race item fallback.
 7. Prompts (`backend/prompts/`):
    - `authoring_system.txt` — describes the schema, op palette, design principles.
    - `judge_system.txt` — strict / lenient variants, JSON output spec.

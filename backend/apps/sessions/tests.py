@@ -1,4 +1,5 @@
 from datetime import timedelta
+from unittest.mock import patch
 
 from asgiref.sync import async_to_sync
 from channels.db import database_sync_to_async
@@ -305,6 +306,84 @@ class SessionApiTests(TestCase):
         self.assertTrue(payload["state"]["submissions"][question_id][player_id]["accepted"])
         self.assertEqual(payload["state"]["scores"][player_id], 10.0)
         self.assertEqual(payload["state"]["submissions"][question_id][player_id]["submitted_text"], canonical_answer)
+
+    def test_submit_answer_uses_llm_fallback_after_fuzzy_miss(self):
+        quiz = create_quiz_from_document(
+            {
+                "title": "Cameroon Geography",
+                "description": "Alias judging test.",
+                "category": "geography",
+                "topic": "Cameroon",
+                "difficulty": "easy",
+                "rounds": [
+                    {
+                        "type": "sync_open",
+                        "order": 1,
+                        "config": {"points_per_question": 10},
+                        "questions": [
+                            {
+                                "order": 1,
+                                "prompt_blocks": [
+                                    {
+                                        "type": "text",
+                                        "text": "What is the name of Cameroon's highest mountain?",
+                                    }
+                                ],
+                                "answer_widget": {
+                                    "type": "text_input",
+                                    "placeholder": "Mountain name",
+                                },
+                                "canonical_answer": "Mount Cameroon",
+                                "acceptable_answers": ["Mount Cameroon", "Mt Cameroon"],
+                                "judge_mode": "fuzzy",
+                            }
+                        ],
+                    }
+                ],
+            },
+            AuthoringContext(),
+        )
+        quiz.status = QuizStatus.READY
+        quiz.save(update_fields=["status"])
+        create_response = self.client.post(
+            "/api/sessions/",
+            data={"quiz_id": str(quiz.id), "display_name": "Ariel"},
+            content_type="application/json",
+        )
+        create_payload = create_response.json()
+        session_id = create_payload["session"]["id"]
+        player_id = create_payload["player_id"]
+        self.client.post(f"/api/sessions/{session_id}/start/")
+
+        with patch(
+            "apps.sessions.views.judge_typed_answer_with_llm",
+            return_value={
+                "accepted": True,
+                "judge_latency_ms": 12,
+                "judge_metadata": {
+                    "llm": {
+                        "accepted": True,
+                        "confidence": 0.95,
+                        "reasoning": "Mount Fako is a known alternate name.",
+                    },
+                    "fallback": {"accepted": False},
+                },
+            },
+        ) as judge_mock:
+            submit_response = self.client.post(
+                f"/api/sessions/{session_id}/players/{player_id}/answer/",
+                data={"submitted_text": "Mount Fako"},
+                content_type="application/json",
+            )
+
+        self.assertEqual(submit_response.status_code, 200)
+        judge_mock.assert_called_once()
+        payload = submit_response.json()
+        question_id = payload["state"]["question_id"]
+        submission = payload["state"]["submissions"][question_id][player_id]
+        self.assertTrue(submission["accepted"])
+        self.assertEqual(submission["judge_mode_used"], "llm")
+        self.assertEqual(payload["state"]["scores"][player_id], 10.0)
 
     def test_server_auto_advances_when_all_players_submit(self):
         create_response = self.client.post(
