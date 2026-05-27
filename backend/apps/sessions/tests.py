@@ -9,14 +9,14 @@ from django.utils import timezone
 
 from apps.authoring.ops import AuthoringContext, create_quiz_from_document
 from apps.authoring.sample import sample_quiz_document
-from apps.sessions.models import SessionRole, SessionStatus
+from apps.quizzes.models import AntiCheatStrictness, QuizStatus
+from apps.sessions.models import AntiCheatEvent, AntiCheatSeverity, SessionRole, SessionStatus
 from apps.sessions.views import (
     _auto_advance_session,
     _auto_start_session,
     _session_queryset,
     _state_advance_token,
 )
-from apps.quizzes.models import QuizStatus
 from trivia.asgi import application
 
 
@@ -45,6 +45,13 @@ class SessionApiTests(TestCase):
     def _leave_session(self, session_id: str, player_id: str):
         return self.client.post(
             f"/api/sessions/{session_id}/players/{player_id}/leave/",
+            content_type="application/json",
+        )
+
+    def _report_anticheat(self, session_id: str, player_id: str, kind: str, payload: dict | None = None):
+        return self.client.post(
+            f"/api/sessions/{session_id}/players/{player_id}/anticheat/",
+            data={"kind": kind, "payload": payload or {}},
             content_type="application/json",
         )
 
@@ -517,6 +524,126 @@ class SessionApiTests(TestCase):
         self.assertTrue(payload["state"]["submissions"][question_id][player_id]["accepted"])
         self.assertEqual(payload["state"]["scores"][player_id], 10.0)
         self.assertEqual(payload["state"]["submissions"][question_id][player_id]["submitted_text"], canonical_answer)
+
+    def test_strict_tab_blur_forfeits_current_question(self):
+        self.quiz.anticheat_strictness = AntiCheatStrictness.STRICT
+        self.quiz.save(update_fields=["anticheat_strictness"])
+        create_response = self.client.post(
+            "/api/sessions/",
+            data={"quiz_id": str(self.quiz.id), "display_name": "Ariel", "question_count": 1},
+            content_type="application/json",
+        )
+        session_id = create_response.json()["session"]["id"]
+        player_id = create_response.json()["player_id"]
+        start_response = self._start_session(session_id, player_id)
+        question_id = start_response.json()["state"]["question_id"]
+
+        event_response = self._report_anticheat(
+            session_id,
+            player_id,
+            "tab_blur",
+            {"source": "window.blur"},
+        )
+        answer_response = self.client.post(
+            f"/api/sessions/{session_id}/players/{player_id}/answer/",
+            data={"submitted_text": start_response.json()["quiz"]["rounds"][0]["questions"][0]["canonical_answer"]},
+            content_type="application/json",
+        )
+
+        self.assertEqual(event_response.status_code, 200)
+        payload = event_response.json()
+        submission = payload["state"]["submissions"][question_id][player_id]
+        self.assertTrue(submission["submitted"])
+        self.assertFalse(submission["accepted"])
+        self.assertEqual(submission["judge_mode_used"], "anticheat")
+        self.assertEqual(payload["state"]["scores"][player_id], 0.0)
+        self.assertEqual(payload["state"]["anticheat"]["players"][player_id]["hard_count"], 1)
+        event = AntiCheatEvent.objects.get(session_id=session_id, player_id=player_id, kind="tab_blur")
+        self.assertEqual(event.severity, AntiCheatSeverity.HARD)
+        self.assertEqual(answer_response.status_code, 400)
+        self.assertIn("already submitted", answer_response.json()["detail"])
+
+    def test_strict_paste_rejects_next_submission(self):
+        self.quiz.anticheat_strictness = AntiCheatStrictness.STRICT
+        self.quiz.save(update_fields=["anticheat_strictness"])
+        create_response = self.client.post(
+            "/api/sessions/",
+            data={"quiz_id": str(self.quiz.id), "display_name": "Ariel", "question_count": 1},
+            content_type="application/json",
+        )
+        session_id = create_response.json()["session"]["id"]
+        player_id = create_response.json()["player_id"]
+        start_response = self._start_session(session_id, player_id)
+        question_id = start_response.json()["state"]["question_id"]
+        canonical_answer = start_response.json()["quiz"]["rounds"][0]["questions"][0]["canonical_answer"]
+
+        event_response = self._report_anticheat(
+            session_id,
+            player_id,
+            "paste",
+            {"target": "answer_input"},
+        )
+        submit_response = self.client.post(
+            f"/api/sessions/{session_id}/players/{player_id}/answer/",
+            data={"submitted_text": canonical_answer},
+            content_type="application/json",
+        )
+
+        self.assertEqual(event_response.status_code, 200)
+        self.assertEqual(submit_response.status_code, 200)
+        submission = submit_response.json()["state"]["submissions"][question_id][player_id]
+        self.assertFalse(submission["accepted"])
+        self.assertEqual(submission["submitted_text"], canonical_answer)
+        self.assertEqual(submission["judge_metadata"]["kind"], "paste")
+        event = AntiCheatEvent.objects.get(session_id=session_id, player_id=player_id, kind="paste")
+        self.assertEqual(event.severity, AntiCheatSeverity.HARD)
+
+    def test_friendly_anticheat_logs_without_penalty(self):
+        self.quiz.anticheat_strictness = AntiCheatStrictness.FRIENDLY
+        self.quiz.save(update_fields=["anticheat_strictness"])
+        create_response = self.client.post(
+            "/api/sessions/",
+            data={"quiz_id": str(self.quiz.id), "display_name": "Ariel", "question_count": 1},
+            content_type="application/json",
+        )
+        session_id = create_response.json()["session"]["id"]
+        player_id = create_response.json()["player_id"]
+        start_response = self._start_session(session_id, player_id)
+        question_id = start_response.json()["state"]["question_id"]
+        canonical_answer = start_response.json()["quiz"]["rounds"][0]["questions"][0]["canonical_answer"]
+
+        event_response = self._report_anticheat(session_id, player_id, "paste")
+        submit_response = self.client.post(
+            f"/api/sessions/{session_id}/players/{player_id}/answer/",
+            data={"submitted_text": canonical_answer},
+            content_type="application/json",
+        )
+
+        self.assertEqual(event_response.status_code, 200)
+        self.assertEqual(submit_response.status_code, 200)
+        submission = submit_response.json()["state"]["submissions"][question_id][player_id]
+        self.assertTrue(submission["accepted"])
+        self.assertEqual(submit_response.json()["state"]["scores"][player_id], 10.0)
+        event = AntiCheatEvent.objects.get(session_id=session_id, player_id=player_id, kind="paste")
+        self.assertEqual(event.severity, AntiCheatSeverity.SOFT)
+
+    def test_anticheat_off_does_not_collect_events(self):
+        self.quiz.anticheat_strictness = AntiCheatStrictness.OFF
+        self.quiz.save(update_fields=["anticheat_strictness"])
+        create_response = self.client.post(
+            "/api/sessions/",
+            data={"quiz_id": str(self.quiz.id), "display_name": "Ariel", "question_count": 1},
+            content_type="application/json",
+        )
+        session_id = create_response.json()["session"]["id"]
+        player_id = create_response.json()["player_id"]
+        self._start_session(session_id, player_id)
+
+        event_response = self._report_anticheat(session_id, player_id, "tab_blur")
+
+        self.assertEqual(event_response.status_code, 200)
+        self.assertFalse(AntiCheatEvent.objects.filter(session_id=session_id).exists())
+        self.assertNotIn("anticheat", event_response.json()["state"])
 
     def test_submit_answer_uses_llm_fallback_after_fuzzy_miss(self):
         quiz = create_quiz_from_document(

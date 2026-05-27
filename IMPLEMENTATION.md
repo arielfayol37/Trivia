@@ -116,6 +116,13 @@ Implemented:
   - Late answers after the question deadline are rejected.
   - Start-session and force-next mutations require the host player's id server-side;
     non-host players cannot trigger them by calling the REST endpoint directly.
+  - Basic anti-cheat instrumentation is live:
+    - Browser blur/focus and answer-input paste events report to the backend while a
+      game is playing.
+    - `strict` quizzes enforce hard signals: tab blur forfeits the current unanswered
+      question and paste rejects the next submission for that question.
+    - `friendly` quizzes log the same signals as soft events without penalties.
+    - `off` quizzes ignore anti-cheat events.
 - Play UI has a first-pass game-show/stage visual direction:
   - Player-facing Play Hub.
   - Lobby room with large invite code and player tiles.
@@ -133,6 +140,8 @@ Implemented:
     instead of looking like a broken lobby link.
   - Finished games include a question review rail with the prompt, correct answer,
     accepted alternatives, each player's submission, and awarded points.
+  - Anti-cheat signals appear as compact score-bar badges and a post-game integrity
+    summary when any player has signals.
   - Mobile form controls use 16px text to avoid iOS/Safari zooming into focused answer
     and chat fields.
   - New questions reset the window scroll position to the top.
@@ -149,7 +158,8 @@ Verified locally:
 - `npm run build`
 - Browser QA for authoring lifecycle, Play Hub ready-only catalog, selected draft
   blueprint, live question layout, WebSocket lobby updates, and backend-owned question
-  auto-advance/countdown, post-game action visibility, and refresh reconnect.
+  auto-advance/countdown, post-game action visibility, refresh reconnect, late-join
+  spectator mode, and anti-cheat signal badges/post-game integrity summary.
 
 Still not done:
 
@@ -167,7 +177,8 @@ Still not done:
   list-race item matching.
 - Deeper post-game replay tooling beyond the current final scoreboard, question review,
   same-topic action, and room chat.
-- Anti-cheat instrumentation/enforcement.
+- Advanced anti-cheat work: keystroke cadence, fast-answer heuristics, richer opponent
+  indicators, and stronger identity binding for production play.
 - Accounts/auth polish.
 - Public leaderboard and play history.
 - Robust LLM op-emitting authoring agent; current generation is mostly full-document
@@ -662,22 +673,25 @@ questions.
 - Category filters exist for the local catalog experience.
 
 **Tasks**:
-1. Anti-cheat browser instrumentation (`frontend/src/lib/anticheat.ts`):
-   - Page Visibility API listener.
-   - `onpaste` handler on every answer input.
-   - Keystroke cadence recorder (timestamps + deltas) — sent at answer-submit time.
-2. Anti-cheat server (`apps/anticheat/`):
-   - WS message type `anticheat.event` ingested into `AntiCheatEvent`.
-   - Hard-signal enforcement at question scoring time (paste during active question →
-     auto-reject; tab blur during active question → forfeit).
-   - Soft-signal aggregation broadcast (`session.anticheat_indicator`) for opponent UI.
+1. Anti-cheat browser instrumentation:
+   - Implemented: Page Visibility/window blur/focus listener.
+   - Implemented: `onpaste` handler on live typed-answer inputs.
+   - Remaining: keystroke cadence recorder (timestamps + deltas) sent at answer-submit
+     time.
+2. Anti-cheat server:
+   - Implemented: REST event ingest into `AntiCheatEvent`.
+   - Implemented: hard-signal enforcement for standard active questions (paste during
+     active question → auto-reject; tab blur during active question → forfeit).
+   - Implemented: soft-signal aggregation in session snapshots for compact UI
+     indicators.
+   - Remaining: dedicated WS message ingest and richer real-time opponent panel.
 3. Quiz schema gets `anticheat_strictness`; UI exposes it as a preset selector in the
-   editor.
+   editor. Implemented.
 4. Post-game review (`features/review/`):
    - Final scoreboard with normalized + raw scores per round.
    - Per-question results: prompt, each player's answer, accepted/rejected, time-to-
      answer, judge mode.
-   - Anti-cheat summary: counts per signal type per player.
+   - Implemented: Anti-cheat summary counts per signal type per player.
    - "Play again" button → new session, same quiz, returns players to a fresh lobby.
 5. Public catalog / browse polish (`features/catalog/` or expanded Play Hub):
    - Catalog lists public `ready` quizzes with title, author, category, topic,

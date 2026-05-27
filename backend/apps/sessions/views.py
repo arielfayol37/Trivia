@@ -14,10 +14,27 @@ from rest_framework.views import APIView
 
 from apps.judging.fuzzy import fuzzy_match, normalize_answer
 from apps.judging.llm import judge_typed_answer_with_llm
-from apps.quizzes.models import JudgeMode, Question, Quiz, QuizStatus, Round, RoundType
-from apps.sessions.models import AnswerSubmission, Session, SessionPlayer, SessionRole, SessionStatus
+from apps.quizzes.models import (
+    AntiCheatStrictness,
+    JudgeMode,
+    Question,
+    Quiz,
+    QuizStatus,
+    Round,
+    RoundType,
+)
+from apps.sessions.models import (
+    AnswerSubmission,
+    AntiCheatEvent,
+    AntiCheatSeverity,
+    Session,
+    SessionPlayer,
+    SessionRole,
+    SessionStatus,
+)
 from apps.sessions.realtime import broadcast_session_snapshot_sync
 from apps.sessions.serializers import (
+    AntiCheatEventSerializer,
     ChatMessageSerializer,
     CreateSessionSerializer,
     JoinSessionSerializer,
@@ -33,6 +50,7 @@ _AUTO_ADVANCE_TIMERS: dict[str, threading.Timer] = {}
 _LOBBY_COUNTDOWN_LOCK = threading.Lock()
 _LOBBY_COUNTDOWN_TIMERS: dict[str, threading.Timer] = {}
 PLAYABLE_WIDGET_TYPES = {"text_input", "multiple_choice", "image_choice", "ordering", "matching"}
+ANTICHEAT_HARD_KINDS = {"tab_blur", "paste"}
 
 
 class SessionCreateView(APIView):
@@ -232,45 +250,56 @@ class SessionSubmitAnswerView(APIView):
                 {"detail": "No active question"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        if _player_submitted(session, question, player):
+            return Response(
+                {"detail": "Answer is already submitted"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         submitted_payload = serializer.validated_data.get("submitted_payload") or {}
         submitted_text = _submitted_text(serializer.validated_data, submitted_payload)
+        anticheat_rejection = _hard_anticheat_rejection_kind(session, question, player)
+        if anticheat_rejection:
+            _record_question_submission(
+                session=session,
+                question=question,
+                player=player,
+                submitted_text=submitted_text,
+                submitted_payload=submitted_payload,
+                accepted=False,
+                points_awarded=0,
+                judge_mode_used="anticheat",
+                judge_metadata={
+                    "anticheat": True,
+                    "kind": anticheat_rejection,
+                    "reason": "Answer rejected by strict anti-cheat",
+                },
+            )
+            refreshed = _session_queryset().get(pk=session_id)
+            broadcast_session_snapshot_sync(session_id, "session.answer_submitted")
+            if _all_active_players_submitted(refreshed, question):
+                _schedule_auto_advance(
+                    refreshed,
+                    reason="all_submitted",
+                    delay_s=_all_submitted_advance_delay_s(),
+                )
+            return Response(SessionSerializer(refreshed).data)
+
         result = _judge_submission(question, submitted_text, submitted_payload)
         points_awarded = _points_for_question(session, question, player) if result["accepted"] else 0
 
-        AnswerSubmission.objects.update_or_create(
+        _record_question_submission(
             session=session,
             question=question,
             player=player,
-            defaults={
-                "round": question.round,
-                "submitted_text": submitted_text,
-                "submitted_payload": submitted_payload,
-                "accepted": result["accepted"],
-                "points_awarded": points_awarded,
-                "judge_mode_used": result["judge_mode_used"],
-                "judge_latency_ms": result.get("judge_latency_ms", 0),
-                "judge_metadata": result["judge_metadata"],
-            },
+            submitted_text=submitted_text,
+            submitted_payload=submitted_payload,
+            accepted=result["accepted"],
+            points_awarded=points_awarded,
+            judge_mode_used=result["judge_mode_used"],
+            judge_latency_ms=result.get("judge_latency_ms", 0),
+            judge_metadata=result["judge_metadata"],
         )
-
-        state = session.state or {}
-        question_id = str(question.id)
-        player_id_text = str(player.id)
-        submissions = state.setdefault("submissions", {})
-        question_submissions = submissions.setdefault(question_id, {})
-        question_submissions[player_id_text] = {
-            "accepted": result["accepted"],
-            "points_awarded": points_awarded,
-            "submitted_text": submitted_text,
-            "submitted": True,
-            "judge_mode_used": result["judge_mode_used"],
-            "wager": _wager_for_player(session.state or {}, question, player),
-        }
-        scores = state.setdefault("scores", {})
-        scores[player_id_text] = _score_for_player(session, player)
-        session.state = state
-        session.save(update_fields=["state"])
 
         refreshed = _session_queryset().get(pk=session_id)
         broadcast_session_snapshot_sync(session_id, "session.answer_submitted")
@@ -358,6 +387,42 @@ class SessionChatView(APIView):
 
         refreshed = _session_queryset().get(pk=session_id)
         broadcast_session_snapshot_sync(session_id, "session.chat_message")
+        return Response(SessionSerializer(refreshed).data)
+
+
+class SessionAntiCheatEventView(APIView):
+    def post(self, request, session_id, player_id):
+        serializer = AntiCheatEventSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        session = get_object_or_404(_session_queryset(), pk=session_id)
+        player = get_object_or_404(SessionPlayer, pk=player_id, session=session)
+        player_error = _player_game_action_error(player, action="report gameplay events")
+        if player_error:
+            return player_error
+        if session.status != SessionStatus.PLAYING:
+            return Response(
+                {"detail": "Anti-cheat events can only be reported while playing"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if session.quiz.anticheat_strictness == AntiCheatStrictness.OFF:
+            return Response(SessionSerializer(session).data)
+
+        _event, forfeited_question = _record_anticheat_event(
+            session,
+            player,
+            serializer.validated_data["kind"],
+            serializer.validated_data.get("payload") or {},
+        )
+
+        refreshed = _session_queryset().get(pk=session_id)
+        broadcast_session_snapshot_sync(session_id, "session.anticheat_event")
+        if forfeited_question and _all_active_players_submitted(refreshed, forfeited_question):
+            _schedule_auto_advance(
+                refreshed,
+                reason="all_submitted",
+                delay_s=_all_submitted_advance_delay_s(),
+            )
         return Response(SessionSerializer(refreshed).data)
 
 
@@ -1594,6 +1659,189 @@ def _submit_list_race_answer(session: Session, player: SessionPlayer, validated:
     refreshed = _session_queryset().get(pk=session.id)
     broadcast_session_snapshot_sync(session.id, "session.answer_submitted")
     return Response(SessionSerializer(refreshed).data)
+
+
+def _record_question_submission(
+    *,
+    session: Session,
+    question: Question,
+    player: SessionPlayer,
+    submitted_text: str,
+    submitted_payload: dict,
+    accepted: bool,
+    points_awarded: float,
+    judge_mode_used: str,
+    judge_metadata: dict,
+    judge_latency_ms: int = 0,
+) -> None:
+    AnswerSubmission.objects.update_or_create(
+        session=session,
+        question=question,
+        player=player,
+        defaults={
+            "round": question.round,
+            "submitted_text": submitted_text,
+            "submitted_payload": submitted_payload,
+            "accepted": accepted,
+            "points_awarded": points_awarded,
+            "judge_mode_used": judge_mode_used,
+            "judge_latency_ms": judge_latency_ms,
+            "judge_metadata": judge_metadata,
+        },
+    )
+
+    state = session.state or {}
+    question_id = str(question.id)
+    player_id_text = str(player.id)
+    submissions = state.setdefault("submissions", {})
+    question_submissions = submissions.setdefault(question_id, {})
+    question_submissions[player_id_text] = {
+        "accepted": accepted,
+        "points_awarded": points_awarded,
+        "submitted_text": submitted_text,
+        "submitted": True,
+        "judge_mode_used": judge_mode_used,
+        "judge_metadata": judge_metadata,
+        "wager": _wager_for_player(session.state or {}, question, player),
+    }
+    scores = state.setdefault("scores", {})
+    scores[player_id_text] = _score_for_player(session, player)
+    session.state = state
+    session.save(update_fields=["state"])
+
+
+def _record_anticheat_event(
+    session: Session,
+    player: SessionPlayer,
+    kind: str,
+    payload: dict,
+) -> tuple[AntiCheatEvent, Question | None]:
+    question = _current_question(session) if (session.state or {}).get("phase") == "question" else None
+    severity = _anticheat_event_severity(session, kind, question)
+    event = AntiCheatEvent.objects.create(
+        session=session,
+        player=player,
+        question=question,
+        kind=kind,
+        severity=severity,
+        payload=payload,
+        occurred_at=timezone.now(),
+    )
+
+    enforced = False
+    forfeited_question = None
+    if (
+        severity == AntiCheatSeverity.HARD
+        and kind == "tab_blur"
+        and question
+        and not _player_submitted(session, question, player)
+        and not _deadline_has_elapsed(session)
+    ):
+        _record_question_submission(
+            session=session,
+            question=question,
+            player=player,
+            submitted_text="",
+            submitted_payload={},
+            accepted=False,
+            points_awarded=0,
+            judge_mode_used="anticheat",
+            judge_metadata={
+                "anticheat": True,
+                "kind": kind,
+                "event_id": str(event.id),
+                "reason": "Forfeited after leaving the tab during a strict question",
+            },
+        )
+        enforced = True
+        forfeited_question = question
+
+    _apply_anticheat_summary(session, player, event, enforced=enforced)
+    return event, forfeited_question
+
+
+def _anticheat_event_severity(
+    session: Session,
+    kind: str,
+    question: Question | None,
+) -> str:
+    if (
+        session.quiz.anticheat_strictness == AntiCheatStrictness.STRICT
+        and kind in ANTICHEAT_HARD_KINDS
+        and question
+        and not _deadline_has_elapsed(session)
+    ):
+        return AntiCheatSeverity.HARD
+    return AntiCheatSeverity.SOFT
+
+
+def _apply_anticheat_summary(
+    session: Session,
+    player: SessionPlayer,
+    event: AntiCheatEvent,
+    *,
+    enforced: bool,
+) -> None:
+    state = session.state or {}
+    anticheat = state.setdefault("anticheat", {})
+    players = anticheat.setdefault("players", {})
+    player_key = str(player.id)
+    summary = players.setdefault(player_key, {})
+
+    if event.kind == "tab_blur":
+        summary["blur_count"] = int(summary.get("blur_count") or 0) + 1
+        summary["focus_state"] = "blurred"
+    elif event.kind == "tab_focus":
+        summary["focus_state"] = "focused"
+    elif event.kind == "paste":
+        summary["paste_count"] = int(summary.get("paste_count") or 0) + 1
+
+    if event.severity == AntiCheatSeverity.HARD:
+        summary["hard_count"] = int(summary.get("hard_count") or 0) + 1
+
+    summary["last_action"] = event.kind
+    summary["last_severity"] = event.severity
+    summary["last_event_at"] = event.occurred_at.isoformat()
+
+    if event.question_id:
+        questions = summary.setdefault("questions", {})
+        question_summary = questions.setdefault(str(event.question_id), {})
+        question_summary[event.kind] = {
+            "event_id": str(event.id),
+            "severity": event.severity,
+            "occurred_at": event.occurred_at.isoformat(),
+            "enforced": enforced,
+        }
+
+    session.state = state
+    session.save(update_fields=["state"])
+
+
+def _hard_anticheat_rejection_kind(
+    session: Session,
+    question: Question,
+    player: SessionPlayer,
+) -> str | None:
+    if session.quiz.anticheat_strictness != AntiCheatStrictness.STRICT:
+        return None
+
+    player_summary = _anticheat_player_summary(session, player)
+    question_summary = _as_dict(_as_dict(player_summary.get("questions")).get(str(question.id)))
+    for kind in ("tab_blur", "paste"):
+        event_summary = _as_dict(question_summary.get(kind))
+        if event_summary.get("severity") == AntiCheatSeverity.HARD:
+            return kind
+    return None
+
+
+def _anticheat_player_summary(session: Session, player: SessionPlayer) -> dict:
+    return _as_dict(
+        _as_dict(_as_dict((session.state or {}).get("anticheat")).get("players")).get(str(player.id))
+    )
+
+
+def _as_dict(value) -> dict:
+    return value if isinstance(value, dict) else {}
 
 
 def _current_round(session: Session) -> Round | None:

@@ -207,6 +207,20 @@ export function sendSessionChat(sessionId: string, playerId: string, message: st
   );
 }
 
+export function reportAntiCheatEvent(
+  sessionId: string,
+  playerId: string,
+  input: { kind: "tab_blur" | "tab_focus" | "paste"; payload?: Record<string, unknown> },
+) {
+  return request<LiveSession>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/players/${encodeURIComponent(playerId)}/anticheat/`,
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+  );
+}
+
 export function continueSessionQuestion(sessionId: string, playerId: string) {
   return request<LiveSession>(
     `/api/sessions/${encodeURIComponent(sessionId)}/players/${encodeURIComponent(playerId)}/continue/`,

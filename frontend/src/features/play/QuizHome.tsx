@@ -19,6 +19,7 @@ import {
   RotateCcw,
   Search,
   SendHorizontal,
+  ShieldAlert,
   Sparkles,
   Trophy,
   Users,
@@ -38,6 +39,7 @@ import {
   leaveSession,
   listQuizzes,
   placeSessionWager,
+  reportAntiCheatEvent,
   sendSessionChat,
   setSessionPlayerReady,
   startSession,
@@ -62,6 +64,7 @@ import { RoundIntroSlate } from "./RoundIntroSlate";
 type DifficultyFilter = "all" | Quiz["difficulty"];
 type QuizCategoryId = "all" | Quiz["category"];
 type QuizRound = Quiz["rounds"][number];
+type AntiCheatKind = "tab_blur" | "tab_focus" | "paste";
 type PlayedQuestion = {
   question: Question;
   round: QuizRound;
@@ -395,6 +398,24 @@ function activeGamePlayers(session: LiveSession) {
   });
 }
 
+function antiCheatSummary(session: LiveSession, playerId: string) {
+  const summary = asRecord(
+    asRecord(asRecord(asRecord(session.state).anticheat).players)[playerId],
+  );
+  return {
+    blurCount: numberFrom(summary.blur_count, 0),
+    focusState: typeof summary.focus_state === "string" ? summary.focus_state : "",
+    hardCount: numberFrom(summary.hard_count, 0),
+    lastAction: typeof summary.last_action === "string" ? summary.last_action : "",
+    lastSeverity: typeof summary.last_severity === "string" ? summary.last_severity : "",
+    pasteCount: numberFrom(summary.paste_count, 0),
+  };
+}
+
+function antiCheatTotal(summary: ReturnType<typeof antiCheatSummary>) {
+  return summary.blurCount + summary.pasteCount;
+}
+
 const ROUND_LABELS: Record<Quiz["rounds"][number]["type"], string> = {
   meta_strategy: "Meta-strategy",
   list_race: "List race",
@@ -508,6 +529,78 @@ export function QuizHome() {
       socket.close();
     };
   }, [liveSession?.id, localPlayerId]);
+
+  useEffect(() => {
+    if (!liveSession || liveSession.status !== "playing" || liveSession.quiz.anticheat_strictness === "off" || !localPlayerId) {
+      return;
+    }
+    const localPlayer = liveSession.players.find((player) => player.id === localPlayerId);
+    if (!localPlayer || localPlayer.role !== "player" || localPlayer.left_at !== null) {
+      return;
+    }
+
+    let cancelled = false;
+    const lastSentAt: Partial<Record<AntiCheatKind, number>> = {};
+    const state = asRecord(liveSession.state);
+    const phase = typeof state.phase === "string" ? state.phase : "";
+    const questionId = typeof state.question_id === "string" ? state.question_id : "";
+
+    function send(kind: AntiCheatKind, payload: Record<string, unknown> = {}) {
+      const now = Date.now();
+      if (lastSentAt[kind] && now - lastSentAt[kind]! < 1500) {
+        return;
+      }
+      lastSentAt[kind] = now;
+      reportAntiCheatEvent(liveSession!.id, localPlayerId!, {
+        kind,
+        payload: {
+          ...payload,
+          phase,
+          question_id: questionId,
+          reported_at: new Date().toISOString(),
+        },
+      })
+        .then((session) => {
+          if (!cancelled) {
+            setLiveSession(session);
+          }
+        })
+        .catch(() => undefined);
+    }
+
+    function handleVisibilityChange() {
+      if (document.visibilityState === "hidden") {
+        send("tab_blur", { source: "visibilitychange" });
+      } else {
+        send("tab_focus", { source: "visibilitychange" });
+      }
+    }
+
+    function handleWindowBlur() {
+      send("tab_blur", { source: "window.blur" });
+    }
+
+    function handleWindowFocus() {
+      send("tab_focus", { source: "window.focus" });
+    }
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("blur", handleWindowBlur);
+    window.addEventListener("focus", handleWindowFocus);
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("blur", handleWindowBlur);
+      window.removeEventListener("focus", handleWindowFocus);
+    };
+  }, [
+    liveSession?.id,
+    liveSession?.quiz.anticheat_strictness,
+    liveSession?.state,
+    liveSession?.status,
+    liveSession?.players,
+    localPlayerId,
+  ]);
 
   useEffect(() => {
     if (!isInviteJoinMode) {
@@ -754,6 +847,35 @@ export function QuizHome() {
     }
   }
 
+  async function handleReportAntiCheatEvent(
+    kind: AntiCheatKind,
+    payload: Record<string, unknown> = {},
+  ) {
+    if (!liveSession || liveSession.quiz.anticheat_strictness === "off" || !localPlayerId) {
+      return;
+    }
+    const localPlayer = liveSession.players.find((player) => player.id === localPlayerId);
+    if (!localPlayer || localPlayer.role !== "player" || localPlayer.left_at !== null) {
+      return;
+    }
+
+    try {
+      setLiveSession(
+        await reportAntiCheatEvent(liveSession.id, localPlayerId, {
+          kind,
+          payload: {
+            ...payload,
+            phase: asRecord(liveSession.state).phase,
+            question_id: asRecord(liveSession.state).question_id,
+            reported_at: new Date().toISOString(),
+          },
+        }),
+      );
+    } catch {
+      // Anti-cheat reporting should never interrupt answering.
+    }
+  }
+
   async function handleAdvanceQuestion() {
     if (!liveSession || !localPlayerId) {
       return;
@@ -832,6 +954,7 @@ export function QuizHome() {
           onPlayAgain={() => handleCreateLobby(liveSession.quiz)}
           onPlaceWager={handlePlaceWager}
           onContinueQuestion={handleContinueQuestion}
+          onReportAntiCheatEvent={handleReportAntiCheatEvent}
           onSendChat={handleSendChat}
           onSubmitAnswer={handleSubmitAnswer}
           session={liveSession}
@@ -1765,6 +1888,7 @@ function GameRoom({
   onFindSimilar,
   onPlayAgain,
   onPlaceWager,
+  onReportAntiCheatEvent,
   onSendChat,
   onSubmitAnswer,
   session,
@@ -1778,6 +1902,7 @@ function GameRoom({
   onFindSimilar: (quiz: Quiz) => void;
   onPlayAgain: () => void;
   onPlaceWager: (points: number) => void;
+  onReportAntiCheatEvent: (kind: AntiCheatKind, payload?: Record<string, unknown>) => void;
   onSendChat: (message: string) => Promise<void>;
   onSubmitAnswer: (input: {
     submitted_text?: string;
@@ -1805,6 +1930,7 @@ function GameRoom({
         isUpdatingSession={isUpdatingSession}
         localPlayerId={localPlayerId}
         onAdvanceQuestion={onAdvanceQuestion}
+        onReportAntiCheatEvent={onReportAntiCheatEvent}
         onSendChat={onSendChat}
         onSubmitAnswer={onSubmitAnswer}
         session={session}
@@ -1833,6 +1959,7 @@ function GameRoom({
       localPlayerId={localPlayerId}
       onAdvanceQuestion={onAdvanceQuestion}
       onContinueQuestion={onContinueQuestion}
+      onReportAntiCheatEvent={onReportAntiCheatEvent}
       onSendChat={onSendChat}
       onSubmitAnswer={onSubmitAnswer}
       session={session}
@@ -2089,6 +2216,7 @@ function ListRaceRoom({
   isUpdatingSession,
   localPlayerId,
   onAdvanceQuestion,
+  onReportAntiCheatEvent,
   onSendChat,
   onSubmitAnswer,
   session,
@@ -2097,6 +2225,7 @@ function ListRaceRoom({
   isUpdatingSession: boolean;
   localPlayerId: string | null;
   onAdvanceQuestion: () => void;
+  onReportAntiCheatEvent: (kind: AntiCheatKind, payload?: Record<string, unknown>) => void;
   onSendChat: (message: string) => Promise<void>;
   onSubmitAnswer: (input: {
     submitted_text?: string;
@@ -2184,6 +2313,12 @@ function ListRaceRoom({
                     className="mt-3 h-12 border-white/15 bg-white text-midnight"
                     disabled={isUpdatingSession || !localPlayerId}
                     onChange={(event) => setAnswer(event.target.value)}
+                    onPaste={() =>
+                      onReportAntiCheatEvent("paste", {
+                        round_id: roundId,
+                        target: "list_race_answer",
+                      })
+                    }
                     placeholder="Type an item"
                     value={answer}
                   />
@@ -2255,6 +2390,7 @@ function PlayingRoom({
   localPlayerId,
   onAdvanceQuestion,
   onContinueQuestion,
+  onReportAntiCheatEvent,
   onSendChat,
   onSubmitAnswer,
   session,
@@ -2264,6 +2400,7 @@ function PlayingRoom({
   localPlayerId: string | null;
   onAdvanceQuestion: () => void;
   onContinueQuestion: () => void;
+  onReportAntiCheatEvent: (kind: AntiCheatKind, payload?: Record<string, unknown>) => void;
   onSendChat: (message: string) => Promise<void>;
   onSubmitAnswer: (input: {
     submitted_text?: string;
@@ -2399,6 +2536,12 @@ function PlayingRoom({
                       <AnswerEntry
                         disabled={isUpdatingSession || hasSubmitted || questionClosed || !canSubmitAnswer}
                         hasSubmitted={hasSubmitted}
+                        onPasteSignal={() =>
+                          onReportAntiCheatEvent("paste", {
+                            question_id: question.id,
+                            target: "answer_input",
+                          })
+                        }
                         onSubmit={onSubmitAnswer}
                         question={question}
                         submittedText={
@@ -2670,12 +2813,14 @@ function QuestionTimer({ session }: { session: LiveSession }) {
 function AnswerEntry({
   disabled,
   hasSubmitted,
+  onPasteSignal,
   onSubmit,
   question,
   submittedText,
 }: {
   disabled: boolean;
   hasSubmitted: boolean;
+  onPasteSignal?: () => void;
   onSubmit: (input: {
     submitted_text?: string;
     submitted_payload?: Record<string, unknown>;
@@ -2993,6 +3138,7 @@ function AnswerEntry({
           className="h-12 border-white/15 bg-white text-midnight"
           disabled={disabled}
           onChange={(event) => setAnswer(event.target.value)}
+          onPaste={onPasteSignal}
           placeholder={question.answer_widget.placeholder ?? "Type your answer"}
           value={answer}
         />
@@ -3205,6 +3351,8 @@ function Chyron({ session }: { session: LiveSession }) {
       <div className="mx-auto flex max-w-6xl items-center justify-center gap-3 overflow-x-auto">
         {players.map((player, index) => {
           const presence = playerPresence(session, player.id);
+          const integrity = antiCheatSummary(session, player.id);
+          const integrityCount = antiCheatTotal(integrity);
           return (
             <div
               className="flex shrink-0 items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1.5"
@@ -3219,6 +3367,19 @@ function Chyron({ session }: { session: LiveSession }) {
               </div>
               <div className="text-xs font-semibold text-white">{player.display_name}</div>
               <ScoreNumber value={scoreFor(session, player.id)} />
+              {integrityCount ? (
+                <span
+                  className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10px] font-black uppercase tracking-[0.12em] ${
+                    integrity.hardCount
+                      ? "bg-coral text-white"
+                      : "bg-stagegold/20 text-stagegold"
+                  }`}
+                  title="Anti-cheat signals"
+                >
+                  <ShieldAlert className="h-3 w-3" />
+                  {integrityCount}
+                </span>
+              ) : null}
             </div>
           );
         })}
@@ -3425,6 +3586,7 @@ function FinishedRoom({
         questions={reviewQuestions}
         session={session}
       />
+      <AntiCheatSummaryPanel session={session} />
       <RoomChatPanel
         disabled={!localPlayerId}
         localPlayerId={localPlayerId}
@@ -3434,6 +3596,54 @@ function FinishedRoom({
         tone="dark"
       />
     </div>
+  );
+}
+
+function AntiCheatSummaryPanel({ session }: { session: LiveSession }) {
+  const playersWithSignals = session.players
+    .filter((player) => player.role === "player")
+    .map((player) => ({ player, summary: antiCheatSummary(session, player.id) }))
+    .filter(({ summary }) => antiCheatTotal(summary) > 0);
+
+  if (!playersWithSignals.length) {
+    return null;
+  }
+
+  return (
+    <section className="mt-7 rounded-2xl border border-white/10 bg-night p-5 text-white shadow-stage">
+      <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.45em] text-stagegold">
+        <ShieldAlert className="h-4 w-4" />
+        Integrity
+      </div>
+      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+        {playersWithSignals.map(({ player, summary }) => (
+          <article className="rounded-xl border border-white/10 bg-white/5 p-4" key={player.id}>
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="truncate text-sm font-black text-white">{player.display_name}</div>
+                <div className="mt-1 text-xs font-semibold uppercase tracking-[0.2em] text-white/45">
+                  Last: {summary.lastAction.replace("_", " ") || "signal"}
+                </div>
+              </div>
+              {summary.hardCount ? (
+                <span className="rounded-full bg-coral px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.16em] text-white">
+                  {summary.hardCount} hard
+                </span>
+              ) : (
+                <span className="rounded-full bg-stagegold/20 px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.16em] text-stagegold">
+                  soft
+                </span>
+              )}
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2 text-xs font-bold uppercase tracking-[0.16em] text-white/65">
+              {summary.blurCount ? <span>{summary.blurCount} blur</span> : null}
+              {summary.pasteCount ? <span>{summary.pasteCount} paste</span> : null}
+              {summary.focusState ? <span>{summary.focusState}</span> : null}
+            </div>
+          </article>
+        ))}
+      </div>
+    </section>
   );
 }
 

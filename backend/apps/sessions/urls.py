@@ -1,6 +1,7 @@
 from django.urls import path
 
 from apps.sessions.views import (
+    SessionAntiCheatEventView,
     SessionCreateView,
     SessionChatView,
     SessionContinueView,
@@ -50,6 +51,11 @@ urlpatterns = [
         "<uuid:session_id>/players/<uuid:player_id>/chat/",
         SessionChatView.as_view(),
         name="session-chat",
+    ),
+    path(
+        "<uuid:session_id>/players/<uuid:player_id>/anticheat/",
+        SessionAntiCheatEventView.as_view(),
+        name="session-anticheat-event",
     ),
     path(
         "<uuid:session_id>/players/<uuid:player_id>/continue/",

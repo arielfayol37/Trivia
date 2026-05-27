@@ -71,3 +71,14 @@ class PlaceWagerSerializer(serializers.Serializer):
 
 class ChatMessageSerializer(serializers.Serializer):
     message = serializers.CharField(max_length=500, trim_whitespace=True)
+
+
+class AntiCheatEventSerializer(serializers.Serializer):
+    kind = serializers.ChoiceField(
+        choices=[
+            "tab_blur",
+            "tab_focus",
+            "paste",
+        ]
+    )
+    payload = serializers.JSONField(required=False)
