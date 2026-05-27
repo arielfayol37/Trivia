@@ -134,7 +134,8 @@ Still not done:
   security-redacted per player.
 - Full live support for all answer widgets and round types (`list_input`, `hotspot`,
   richer `meta_strategy` variants, full `buzz_in`). `image_choice`, `ordering`, and
-  `matching` now have basic live renderers and exact payload scoring.
+  `matching` now have live renderers, exact payload scoring, locked-state affordances,
+  and mobile-sized controls.
 - LLM judge fallback currently applies to standard typed open-answer questions, not
   list-race item matching.
 - Post-game review/replay beyond the current final scoreboard and action buttons.
@@ -149,10 +150,10 @@ Immediate next priorities:
 
 1. **Cross-device validation**: run the app on the LAN, test phone + laptop joining the
    same lobby, and tighten any mobile layout or socket issues.
-2. **Play mechanics polish**: improve locked
-   answer states, animate score changes, and make host/non-host controls unambiguous.
+2. **Play mechanics polish**: animate score changes and make host/non-host controls
+   unambiguous.
 3. **Playable widget expansion**: finish live behavior for `list_input` and `hotspot`;
-   polish keyboard/mobile interactions for `ordering`, `matching`, and `image_choice`;
+   polish keyboard navigation for `ordering`, `matching`, and `image_choice`;
    keep `list_race` as a first-class round type rather than a special case.
 4. **Post-game review**: final scoreboard plus per-question answer review. This matters
    because friends will argue about answers.
@@ -498,7 +499,8 @@ prompt-block and answer-widget rendering layer introduced in M1.
 - Preview renderers exist for text input, multiple choice, ordering, matching,
   image choice, hotspot, and list-race data.
 - Live runner supports text input, multiple choice, image choice, ordering, and matching
-  through the standard submission path.
+  through the standard submission path, with visible locked states and mobile-sized
+  controls for the structured widgets.
 - A minimal live list-race runner can start, accept fuzzy-matched items, and score them.
 
 **Tasks**:
@@ -506,8 +508,9 @@ prompt-block and answer-widget rendering layer introduced in M1.
    - `list_input` gets a live multi-answer input renderer outside list-race.
    - `multiple_choice` is already playable; polish keyboard navigation and selected/
      locked state.
-   - `ordering`, `matching`, and `image_choice` have basic live renderers and exact
-     payload scoring; polish mobile interaction and locked-state affordances.
+   - `ordering`, `matching`, and `image_choice` have live renderers, exact payload
+     scoring, locked-state affordances, and mobile-sized controls; polish keyboard
+     navigation next.
    - `hotspot` keeps a validated payload shape until a map/image-click renderer lands.
 2. **List race** (`apps/sessions/rounds/list_race.py` + `features/play/list-race/`):
    - Move current minimal list-race logic into a dedicated state-machine module.

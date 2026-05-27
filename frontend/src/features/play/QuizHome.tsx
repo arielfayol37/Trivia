@@ -43,6 +43,7 @@ import {
 import type { AnswerWidget, HealthResponse, LiveSession, Question, Quiz, SessionChatMessage } from "../../api/types";
 import { Button } from "../../components/ui/Button";
 import { Input } from "../../components/ui/Field";
+import { cn } from "../../lib/cn";
 import { InlineMathText } from "./MathText";
 import { PromptBlocksRenderer } from "./PromptBlocksRenderer";
 import { RoundIntroSlate } from "./RoundIntroSlate";
@@ -1943,6 +1944,9 @@ function PlayingRoom({
                     hasSubmitted={hasSubmitted}
                     onSubmit={onSubmitAnswer}
                     question={question}
+                    submittedText={
+                      typeof submission.submitted_text === "string" ? submission.submitted_text : ""
+                    }
                   />
                 </div>
 
@@ -2166,6 +2170,7 @@ function AnswerEntry({
   hasSubmitted,
   onSubmit,
   question,
+  submittedText,
 }: {
   disabled: boolean;
   hasSubmitted: boolean;
@@ -2174,18 +2179,21 @@ function AnswerEntry({
     submitted_payload?: Record<string, unknown>;
   }) => void;
   question: Question;
+  submittedText: string;
 }) {
   const [answer, setAnswer] = useState("");
   const [orderedItems, setOrderedItems] = useState<string[]>(
     question.answer_widget.type === "ordering" ? question.answer_widget.items : [],
   );
   const [matches, setMatches] = useState<Record<string, string>>({});
+  const [localLockedText, setLocalLockedText] = useState("");
   const [justLockedIn, setJustLockedIn] = useState(false);
 
   useEffect(() => {
     setAnswer("");
     setOrderedItems(question.answer_widget.type === "ordering" ? question.answer_widget.items : []);
     setMatches({});
+    setLocalLockedText("");
     setJustLockedIn(false);
   }, [question.id]);
 
@@ -2194,31 +2202,58 @@ function AnswerEntry({
     window.setTimeout(() => setJustLockedIn(false), 400);
   }
 
+  function submitWithLock(
+    lockedText: string,
+    input: {
+      submitted_text?: string;
+      submitted_payload?: Record<string, unknown>;
+    },
+  ) {
+    setLocalLockedText(lockedText);
+    flashLockIn();
+    onSubmit(input);
+  }
+
+  const lockedText = submittedText || localLockedText;
+
   if (question.answer_widget.type === "multiple_choice") {
     const options = multipleChoiceOptions(question.answer_widget);
     return (
       <div className="grid gap-2">
-        {options.map((option, index) => (
-          <motion.button
-            className="rounded-md border border-white/15 bg-white px-3 py-3 text-left text-sm font-semibold text-midnight transition hover:border-stagegold hover:bg-pale disabled:cursor-not-allowed disabled:opacity-60"
-            disabled={disabled}
-            key={option.id}
-            onClick={() => {
-              flashLockIn();
-              onSubmit({
-                submitted_text: option.label,
-                submitted_payload: { choice_id: option.id, choice_index: index },
-              });
-            }}
-            type="button"
-            whileTap={{ scale: 0.97 }}
-          >
-            <span className="mr-2 inline-flex h-6 w-6 items-center justify-center rounded-md bg-midnight font-display text-xs text-white">
-              {String.fromCharCode(65 + index)}
-            </span>
-            <InlineMathText text={option.label} />
-          </motion.button>
-        ))}
+        {options.map((option, index) => {
+          const isSelected = lockedText === option.label;
+          return (
+            <motion.button
+              className={cn(
+                "touch-manipulation rounded-lg border px-3 py-3 text-left text-base font-semibold text-midnight transition disabled:cursor-not-allowed",
+                isSelected
+                  ? "border-stagegold bg-stagegold/20 ring-2 ring-stagegold/40"
+                  : "border-white/15 bg-white hover:border-stagegold hover:bg-pale",
+                disabled && !isSelected ? "opacity-55" : "",
+              )}
+              disabled={disabled}
+              key={option.id}
+              onClick={() =>
+                submitWithLock(option.label, {
+                  submitted_text: option.label,
+                  submitted_payload: { choice_id: option.id, choice_index: index },
+                })
+              }
+              type="button"
+              whileTap={{ scale: 0.97 }}
+            >
+              <span className="flex items-center gap-2">
+                <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-midnight font-display text-xs text-white">
+                  {String.fromCharCode(65 + index)}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <InlineMathText text={option.label} />
+                </span>
+                {isSelected ? <CheckCircle2 className="h-5 w-5 shrink-0 text-midnight" /> : null}
+              </span>
+            </motion.button>
+          );
+        })}
       </div>
     );
   }
@@ -2229,14 +2264,20 @@ function AnswerEntry({
         <div className="grid gap-2 sm:grid-cols-2">
           {question.answer_widget.images.map((image, index) => {
             const label = image.label ?? image.alt ?? `Choice ${index + 1}`;
+            const isSelected = lockedText === label;
             return (
               <motion.button
-                className="overflow-hidden rounded-lg border border-white/15 bg-white text-left text-midnight shadow-panel transition hover:border-stagegold hover:bg-pale disabled:cursor-not-allowed disabled:opacity-60"
+                className={cn(
+                  "touch-manipulation overflow-hidden rounded-lg border bg-white text-left text-midnight shadow-panel transition disabled:cursor-not-allowed",
+                  isSelected
+                    ? "border-stagegold ring-2 ring-stagegold/50"
+                    : "border-white/15 hover:border-stagegold hover:bg-pale",
+                  disabled && !isSelected ? "opacity-55" : "",
+                )}
                 disabled={disabled}
                 key={`${image.url ?? label}-${index}`}
-                onClick={() => {
-                  flashLockIn();
-                  onSubmit({
+                onClick={() =>
+                  submitWithLock(label, {
                     submitted_text: label,
                     submitted_payload: {
                       choice_index: index,
@@ -2244,12 +2285,12 @@ function AnswerEntry({
                       alt: image.alt ?? "",
                       url: image.url ?? "",
                     },
-                  });
-                }}
+                  })
+                }
                 type="button"
                 whileTap={{ scale: 0.98 }}
               >
-                <div className="flex aspect-video items-center justify-center bg-paper">
+                <div className="relative flex aspect-video items-center justify-center bg-paper">
                   {image.url ? (
                     <img
                       alt={image.alt ?? label}
@@ -2259,8 +2300,13 @@ function AnswerEntry({
                   ) : (
                     <ImageIcon className="h-8 w-8 text-midnight/35" />
                   )}
+                  {isSelected ? (
+                    <span className="absolute right-2 top-2 inline-flex h-8 w-8 items-center justify-center rounded-full bg-stagegold text-midnight shadow-panel">
+                      <CheckCircle2 className="h-5 w-5" />
+                    </span>
+                  ) : null}
                 </div>
-                <div className="px-3 py-2 text-sm font-bold">
+                <div className="px-3 py-2 text-base font-bold">
                   <InlineMathText text={label} />
                 </div>
               </motion.button>
@@ -2289,18 +2335,23 @@ function AnswerEntry({
         <ol className="space-y-2">
           {orderedItems.map((item, index) => (
             <li
-              className="flex items-center gap-2 rounded-lg border border-white/15 bg-white px-3 py-2 text-midnight"
+              className={cn(
+                "flex min-h-14 items-center gap-2 rounded-lg border px-3 py-2 text-midnight transition",
+                lockedText
+                  ? "border-stagegold/55 bg-stagegold/15"
+                  : "border-white/15 bg-white",
+              )}
               key={`${item}-${index}`}
             >
               <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-midnight font-display text-sm text-white">
                 {index + 1}
               </span>
-              <span className="min-w-0 flex-1 text-sm font-semibold">
+              <span className="min-w-0 flex-1 text-base font-semibold">
                 <InlineMathText text={item} />
               </span>
               <button
                 aria-label={`Move ${item} up`}
-                className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-softline bg-paper text-midnight disabled:opacity-35"
+                className="inline-flex h-11 w-11 touch-manipulation items-center justify-center rounded-md border border-softline bg-paper text-midnight transition hover:border-stagegold disabled:opacity-35"
                 disabled={disabled || index === 0}
                 onClick={() => moveItem(index, -1)}
                 title="Move up"
@@ -2310,7 +2361,7 @@ function AnswerEntry({
               </button>
               <button
                 aria-label={`Move ${item} down`}
-                className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-softline bg-paper text-midnight disabled:opacity-35"
+                className="inline-flex h-11 w-11 touch-manipulation items-center justify-center rounded-md border border-softline bg-paper text-midnight transition hover:border-stagegold disabled:opacity-35"
                 disabled={disabled || index === orderedItems.length - 1}
                 onClick={() => moveItem(index, 1)}
                 title="Move down"
@@ -2325,8 +2376,8 @@ function AnswerEntry({
           className="uppercase tracking-wider"
           disabled={disabled || orderedItems.length === 0}
           onClick={() => {
-            flashLockIn();
-            onSubmit({
+            const lockedOrder = orderedItems.join(" > ");
+            submitWithLock(lockedOrder, {
               submitted_text: orderedItems.join(" > "),
               submitted_payload: { order: orderedItems },
             });
@@ -2334,8 +2385,8 @@ function AnswerEntry({
           type="button"
           variant="stage"
         >
-          {hasSubmitted ? <CheckCircle2 className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />}
-          {hasSubmitted ? "Locked" : "Lock order"}
+          {hasSubmitted || lockedText ? <CheckCircle2 className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />}
+          {hasSubmitted || lockedText ? "Locked" : "Lock order"}
         </Button>
       </div>
     );
@@ -2349,31 +2400,37 @@ function AnswerEntry({
     return (
       <div className="grid gap-3">
         <div className="space-y-2">
-          {leftItems.map((leftItem) => {
+          {leftItems.map((leftItem, index) => {
+            const matchId = `match-${question.id}-${index}`;
             const selectedElsewhere = new Set(
               Object.entries(matches)
                 .filter(([item]) => item !== leftItem)
                 .map(([, value]) => value)
                 .filter(Boolean),
             );
+            const selectedValue = matches[leftItem] ?? "";
             return (
-              <label
-                className="grid gap-2 rounded-lg border border-white/15 bg-white px-3 py-3 text-midnight"
+              <div
+                className={cn(
+                  "grid gap-2 rounded-lg border bg-white px-3 py-3 text-midnight transition",
+                  selectedValue || lockedText ? "border-stagegold/60" : "border-white/15",
+                )}
                 key={leftItem}
               >
-                <span className="text-sm font-black">
+                <label className="text-base font-black" htmlFor={matchId}>
                   <InlineMathText text={leftItem} />
-                </span>
+                </label>
                 <select
-                  className="h-11 rounded-md border border-softline bg-paper px-3 text-sm font-semibold outline-none focus:border-stagegold focus:ring-2 focus:ring-stagegold/30"
+                  className="h-12 touch-manipulation rounded-md border border-softline bg-paper px-3 text-base font-semibold outline-none transition focus:border-stagegold focus:ring-2 focus:ring-stagegold/30"
                   disabled={disabled}
+                  id={matchId}
                   onChange={(event) =>
                     setMatches((current) => ({
                       ...current,
                       [leftItem]: event.target.value,
                     }))
                   }
-                  value={matches[leftItem] ?? ""}
+                  value={selectedValue}
                 >
                   <option value="">Choose a match</option>
                   {rightItems.map((rightItem) => (
@@ -2386,7 +2443,7 @@ function AnswerEntry({
                     </option>
                   ))}
                 </select>
-              </label>
+              </div>
             );
           })}
         </div>
@@ -2394,17 +2451,17 @@ function AnswerEntry({
           className="uppercase tracking-wider"
           disabled={disabled || !allMatched}
           onClick={() => {
-            flashLockIn();
-            onSubmit({
-              submitted_text: leftItems.map((item) => `${item} -> ${matches[item]}`).join("; "),
+            const lockedMatches = leftItems.map((item) => `${item} -> ${matches[item]}`).join("; ");
+            submitWithLock(lockedMatches, {
+              submitted_text: lockedMatches,
               submitted_payload: { matches },
             });
           }}
           type="button"
           variant="stage"
         >
-          {hasSubmitted ? <CheckCircle2 className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />}
-          {hasSubmitted ? "Locked" : "Lock matches"}
+          {hasSubmitted || lockedText ? <CheckCircle2 className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />}
+          {hasSubmitted || lockedText ? "Locked" : "Lock matches"}
         </Button>
       </div>
     );
@@ -2425,8 +2482,7 @@ function AnswerEntry({
         event.preventDefault();
         const trimmed = answer.trim();
         if (trimmed) {
-          flashLockIn();
-          onSubmit({ submitted_text: trimmed });
+          submitWithLock(trimmed, { submitted_text: trimmed });
         }
       }}
     >
@@ -2445,7 +2501,7 @@ function AnswerEntry({
         type="submit"
         variant="stage"
       >
-        {hasSubmitted ? (
+        {hasSubmitted || lockedText ? (
           <>
             <CheckCircle2 className="h-4 w-4" />
             Locked
